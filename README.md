@@ -55,7 +55,7 @@ To update, `git pull` and run `./build-app.sh` again.
 
 ## How it works
 
-- Every remote call goes over one shared SSH connection (`ControlMaster`), so refreshes and button clicks are fast. Port forwards from your SSH config are skipped (`ClearAllForwardings`), so the app never conflicts with your normal SSH session.
+- Every remote call goes over one shared SSH connection (`ControlMaster`), so refreshes and button clicks are fast. Port forwards from your SSH config are skipped on that connection (`ClearAllForwardings`); when you turn on port forwarding for a server, a separate `ssh -N` connection runs them.
 - The sidebar refreshes every 2 seconds from `tmux list-panes`.
 - Claude Code writes a record for each running session in `~/.claude/sessions/<pid>.json`, including its tmux pane and status. The app uses that to match windows to conversations, then reads new lines from the conversation log in `~/.claude/projects/`. Nothing is installed on the server; the small Python reader is sent over SSH each time.
 - Messages you send are pasted into the pane with tmux's bracketed paste, so multi-line messages arrive as one.
