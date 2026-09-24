@@ -16,6 +16,9 @@ tmux stays the backend. Your sessions keep running on the server when the app cl
 - **Plain shell windows as a console:** selectable, searchable output (⌘F) with the same input box.
 - **Every tmux action as a button or menu item:** new window or session, split, even out panes, zoom, swap, move a pane into its own window or into another window, move windows between sessions, rename, close. You can also drag panes and windows around in the sidebar.
 - **A raw terminal view** (⌥⌘T) for anything interactive, like vim or htop.
+- **Several servers at once.** Add servers from the + button (it lists the hosts in your `~/.ssh/config`); each gets its own section in the sidebar.
+- **Port forwarding per server.** Turn it on in a server's ••• menu to run that host's `LocalForward` rules from your SSH config in the background. It reconnects on its own and shows which ports are forwarding and which are already taken on your Mac.
+- **Pull requests at a glance.** A side panel (⇧⌘P) lists your open PRs and ones waiting for your review, with approval status and CI results (passed / failed / running). PR links in chats become live chips; hover for approvals and failing checks, click to open. Uses the GitHub CLI (`gh`), which must be installed and signed in on your Mac.
 
 ## Requirements
 
@@ -46,6 +49,7 @@ To update, `git pull` and run `./build-app.sh` again.
 | Split right / down | ⌘D / ⇧⌘D |
 | Copy the whole window | ⇧⌘C |
 | Show as raw terminal | ⌥⌘T |
+| Pull requests panel | ⇧⌘P |
 | Previous / next window | ⌘[ / ⌘] |
 | Go to window 1–9 | ⌘1 … ⌘9 |
 
@@ -56,7 +60,7 @@ To update, `git pull` and run `./build-app.sh` again.
 - Claude Code writes a record for each running session in `~/.claude/sessions/<pid>.json`, including its tmux pane and status. The app uses that to match windows to conversations, then reads new lines from the conversation log in `~/.claude/projects/`. Nothing is installed on the server; the small Python reader is sent over SSH each time.
 - Messages you send are pasted into the pane with tmux's bracketed paste, so multi-line messages arrive as one.
 - The raw terminal view attaches to a private tmux session grouped with yours (`deck-…`). It has its own current window, so it never moves your other tmux clients around, and it's removed automatically when the app disconnects.
-- Your SSH host and font size are in Tmux Deck → Settings (⌘,).
+- Sounds and font size are in Tmux Deck → Settings (⌘,). Servers are added and removed from the sidebar.
 
 ## Limitations
 

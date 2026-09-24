@@ -10,6 +10,7 @@ struct ContentView: View {
     @State private var newSessionPrompt = false
     @State private var movingToNewSession: TmuxWindow?
     @State private var addingServer = false
+    @AppStorage("showPRs") private var showPRs = false
     /// The server a menu action applies to (it may not be the one on screen).
     @State private var target: TmuxModel?
     @EnvironmentObject private var app: AppModel
@@ -28,6 +29,9 @@ struct ContentView: View {
 
     var body: some View {
         main
+            .inspector(isPresented: $showPRs) {
+                PRPanel().inspectorColumnWidth(min: 280, ideal: 340, max: 520)
+            }
             .sheet(isPresented: $addingServer) { AddServerView(sheet: true) }
     }
 
@@ -320,6 +324,12 @@ struct ContentView: View {
                 Label("Window and pane actions", systemImage: "rectangle.3.group")
             }
             .help("Move, split, break out and close windows and panes")
+
+            Toggle(isOn: $showPRs) {
+                Label("Pull requests", systemImage: "arrow.triangle.pull")
+            }
+            .help("Show your GitHub pull requests (⇧⌘P)")
+            .keyboardShortcut("p", modifiers: [.command, .shift])
 
             Toggle(isOn: Binding(
                 get: { model.selectedWindow.map { model.rawTerminal.contains($0.id) } ?? false },

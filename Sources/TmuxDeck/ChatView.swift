@@ -549,6 +549,7 @@ struct MarkdownText: View {
                 continue
             }
             if code != nil { code!.append(line); continue }
+            if line.trimmingCharacters(in: .whitespaces).isEmpty { flush(); continue }
             if let m = line.firstMatch(of: try! Regex(#"^(#{1,4})\s+(.*)$"#)),
                let hashes = m[1].substring, let title = m[2].substring {
                 flush(); blocks.append(.heading(String(title), hashes.count)); continue
@@ -565,10 +566,19 @@ struct MarkdownText: View {
             ForEach(Array(blocks.enumerated()), id: \.offset) { _, block in
                 switch block {
                 case .text(let s):
-                    Text(Self.inline(s))
-                        .lineSpacing(3)
-                        .textSelection(.enabled)
-                        .fixedSize(horizontal: false, vertical: true)
+                    let prs = Self.prURLs(in: s)
+                    // A paragraph that is only PR links becomes chips; otherwise chips go under it.
+                    if prs.isEmpty || !Self.isOnlyLinks(s, prs) {
+                        Text(Self.inline(s))
+                            .lineSpacing(3)
+                            .textSelection(.enabled)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    if !prs.isEmpty {
+                        VStack(alignment: .leading, spacing: 6) {
+                            ForEach(prs, id: \.self) { PRChip(url: $0) }
+                        }
+                    }
                 case .heading(let s, let level):
                     Text(Self.inline(s))
                         .font(level <= 2 ? .title3.weight(.semibold) : .headline)
@@ -587,6 +597,18 @@ struct MarkdownText: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// Distinct GitHub PR links in a paragraph, in order.
+    static func prURLs(in s: String) -> [String] {
+        var seen = Set<String>()
+        return s.matches(of: PRStore.urlPattern).map { String(s[$0.range]) }.filter { seen.insert($0).inserted }
+    }
+
+    static func isOnlyLinks(_ s: String, _ urls: [String]) -> Bool {
+        var rest = s
+        for u in urls { rest = rest.replacingOccurrences(of: u, with: "") }
+        return rest.trimmingCharacters(in: .whitespacesAndNewlines.union(CharacterSet(charactersIn: "<>()[]-*•·,"))).isEmpty
     }
 
     static func inline(_ s: String) -> AttributedString {
