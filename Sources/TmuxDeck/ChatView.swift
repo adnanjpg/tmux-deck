@@ -173,10 +173,16 @@ struct TurnView: View {
         VStack(alignment: .leading, spacing: 12) {
             if let user = turn.user, case .user(let text) = user.kind {
                 MessageCard(role: .you, collapsed: binding(user.id),
-                            summary: text.split(separator: "\n").first.map(String.init) ?? text, detail: "") {
-                    Text(text)
-                        .textSelection(.enabled)
-                        .fixedSize(horizontal: false, vertical: true)
+                            summary: text.split(separator: "\n").first.map(String.init) ?? text,
+                            detail: (user.images ?? 0) > 0 ? "\(user.images!) image\(user.images! == 1 ? "" : "s")" : "") {
+                    VStack(alignment: .leading, spacing: 8) {
+                        if let n = user.images, n > 0 { ImageBadge(count: n) }
+                        if !text.isEmpty {
+                            Text(text)
+                                .textSelection(.enabled)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
                 }
             }
             if !turn.replies.isEmpty {
@@ -288,16 +294,31 @@ struct SendingMessage: View {
                         .foregroundStyle(.secondary)
                     }
                 }
-                Text(message.text)
-                    .foregroundStyle(.secondary)
-                    .textSelection(.enabled)
-                    .padding(.leading, 30)
+                VStack(alignment: .leading, spacing: 6) {
+                    if message.images > 0 { ImageBadge(count: message.images) }
+                    if !message.text.isEmpty {
+                        Text(message.text).foregroundStyle(.secondary).textSelection(.enabled)
+                    }
+                }
+                .padding(.leading, 30)
             }
             .padding(12)
             .background(RoundedRectangle(cornerRadius: 12).fill(Color.secondary.opacity(0.07)))
             .padding(.vertical, 14)
         }
         .transition(.opacity)
+    }
+}
+
+struct ImageBadge: View {
+    let count: Int
+
+    var body: some View {
+        Label("\(count) image\(count == 1 ? "" : "s") attached", systemImage: "photo")
+            .font(.callout)
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 8).padding(.vertical, 4)
+            .background(Capsule().fill(Color.secondary.opacity(0.1)))
     }
 }
 

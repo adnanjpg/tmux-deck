@@ -10,7 +10,8 @@ tmux stays the backend. Your sessions keep running on the server when the app cl
 - **Buttons for Claude's permission questions**, a Stop button, and status in the sidebar (working, needs your answer, ready).
 - **Claude's live progress:** its status line ("Computing… 18s · ↓ 547 tokens"), to-do list and thinking.
 - **Your message shows the moment you send it,** greyed out until Claude's log confirms it arrived.
-- **A status bar** that mirrors Claude Code's status line as native chips: model, effort, context used, 5-hour and weekly usage with reset time, permission mode (click to switch), PRs, shells and agents. Choose what it shows with the slider button.
+- **Paste or drop screenshots** into the input box. They upload to `~/.cache/tmuxdeck` on the server and are sent to Claude as images.
+- **A status bar** that mirrors Claude Code's status line as native chips: model, effort, context used, 5-hour and weekly usage with reset time, permission mode (click to switch), PRs, shells and agents. Choose what it shows with the slider button, and edit Claude's status line command or script from there, with a Test button before saving.
 - **A sound, Dock badge and notification** when a Claude session finishes or needs you. Pick the sounds in Settings (⌘,).
 - **Plain shell windows as a console:** selectable, searchable output (⌘F) with the same input box.
 - **Every tmux action as a button or menu item:** new window or session, split, even out panes, zoom, swap, move a pane into its own window or into another window, move windows between sessions, rename, close. You can also drag panes and windows around in the sidebar.
@@ -60,7 +61,6 @@ To update, `git pull` and run `./build-app.sh` again.
 ## Limitations
 
 - The chat view shows the main conversation only, not subagents' inner steps.
-- The status bar shows what your Claude Code status line prints. To change the contents, edit `statusLine` in `~/.claude/settings.json` on the server.
 - Claude's status and permission choices are read from its screen and session record, so a future Claude Code release could need small fixes.
 - If you type into Claude from somewhere else, the half-typed text doesn't appear in the app's box. Sent messages always show up.
 

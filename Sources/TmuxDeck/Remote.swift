@@ -35,6 +35,19 @@ enum Remote {
 
     /// Runs `script` with the remote login shell and returns its output.
     static func run(_ script: String, input: String? = nil, timeout: TimeInterval = 15) async -> Result {
+        await run(script, data: input.map { Data($0.utf8) }, timeout: timeout)
+    }
+
+    /// Uploads `data` into ~/.cache/tmuxdeck on the remote machine and returns its absolute path.
+    static func upload(_ data: Data, fileName: String) async -> String? {
+        let dir = "~/.cache/tmuxdeck"
+        let result = await run("mkdir -p \(dir) && cat > \(dir)/\(sq(fileName)) && cd \(dir) && printf '%s/%s' \"$PWD\" \(sq(fileName))",
+                               data: data, timeout: 120)
+        let path = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        return result.ok && path.hasPrefix("/") ? path : nil
+    }
+
+    static func run(_ script: String, data input: Data?, timeout: TimeInterval = 15) async -> Result {
         let args = baseOptions + ["-o", "BatchMode=yes", host, script]
         return await Task.detached {
             let process = Process()
@@ -49,7 +62,7 @@ enum Remote {
                 return Result(status: -1, stdout: "", stderr: error.localizedDescription)
             }
             if let inPipe, let input {
-                inPipe.fileHandleForWriting.write(Data(input.utf8))
+                inPipe.fileHandleForWriting.write(input)
                 try? inPipe.fileHandleForWriting.close()
             }
             let timer = DispatchWorkItem { if process.isRunning { process.terminate() } }

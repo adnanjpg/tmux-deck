@@ -108,6 +108,7 @@ struct StatusBar: View {
     let window: TmuxWindow
     @AppStorage("statusbar.version") private var refresh = 0   // bumps when toggles change
     @State private var customizing = false
+    @State private var editing = false
 
     var body: some View {
         let chips = StatusChip.parse(model.statusLines[window.id] ?? []).filter(isShown)
@@ -122,7 +123,13 @@ struct StatusBar: View {
             }
             .buttonStyle(.borderless)
             .help("Choose what the status bar shows")
-            .popover(isPresented: $customizing, arrowEdge: .top) { StatusBarSettings(refresh: $refresh) }
+            .popover(isPresented: $customizing, arrowEdge: .top) {
+                StatusBarSettings(refresh: $refresh) {
+                    customizing = false
+                    editing = true
+                }
+            }
+            .sheet(isPresented: $editing) { StatusLineEditor(window: window) }
         }
         .font(.caption)
         .padding(.horizontal, 12)
@@ -204,6 +211,7 @@ private struct ChipView: View {
 
 private struct StatusBarSettings: View {
     @Binding var refresh: Int
+    var onEdit: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -218,11 +226,11 @@ private struct StatusBarSettings: View {
                 ))
             }
             Divider()
-            Text("The bar mirrors Claude Code's own status line. To change what Claude puts in it, edit the statusLine setting in ~/.claude/settings.json on the server.")
+            Text("The bar mirrors Claude Code's own status line.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .frame(width: 260, alignment: .leading)
-                .fixedSize(horizontal: false, vertical: true)
+            Button("Edit Claude's status line…", action: onEdit)
         }
         .padding(16)
     }

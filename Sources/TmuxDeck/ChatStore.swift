@@ -13,18 +13,24 @@ struct ChatItem: Identifiable, Equatable, Codable {
     var kind: Kind
     var result: String?
     var isError = false
+    var images: Int? = nil
 }
 
 struct PendingMessage: Identifiable, Equatable {
     let id = UUID()
     let text: String
+    var images = 0
     let sentAt = Date()
 }
 
 /// Loosely compares a sent message with what Claude logged (whitespace can differ).
 private func sameMessage(_ a: String, _ b: String) -> Bool {
     func norm(_ s: String) -> String {
-        String(s.split(whereSeparator: \.isWhitespace).joined(separator: " ").prefix(60))
+        let words = s.split(whereSeparator: \.isWhitespace)
+            .filter { !$0.contains("/.cache/tmuxdeck/") }
+            .joined(separator: " ")
+            .replacingOccurrences(of: #"\[Image #\d+\]"#, with: "", options: .regularExpression)
+        return String(words.split(separator: " ").joined(separator: " ").prefix(60))
     }
     return norm(a) == norm(b)
 }
@@ -72,7 +78,7 @@ final class ChatStore: ObservableObject {
 
     private var cacheURL: URL {
         let dir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("TmuxDeck/chats-v3", isDirectory: true)
+            .appendingPathComponent("TmuxDeck/chats-v4", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir.appendingPathComponent("\(sessionID).json")
     }
@@ -93,8 +99,8 @@ final class ChatStore: ObservableObject {
     }
 
     /// Shows a message right away, greyed out, until the log confirms it.
-    func addSending(_ text: String) {
-        sending.append(PendingMessage(text: text))
+    func addSending(_ text: String, images: Int = 0) {
+        sending.append(PendingMessage(text: text, images: images))
     }
 
     /// Fetches what's new since you last looked, showing the small refresh spinner.
@@ -130,7 +136,7 @@ final class ChatStore: ObservableObject {
             case "q-": if !queue.isEmpty { queue.removeFirst() }
             case "qx":
                 if let i = queue.firstIndex(of: text) { queue.remove(at: i) } else if !queue.isEmpty { queue.removeFirst() }
-            case "user": fresh.append(ChatItem(id: id, kind: .user(text)))
+            case "user": fresh.append(ChatItem(id: id, kind: .user(text), images: obj["img"] as? Int))
             case "text": fresh.append(ChatItem(id: id, kind: .assistant(text)))
             case "note": fresh.append(ChatItem(id: id, kind: .note(text)))
             case "thinking": fresh.append(ChatItem(id: id, kind: .thinking(text)))
@@ -240,6 +246,7 @@ for raw in data[:end].splitlines():
     if t == "user":
         if isinstance(content, str):
             content = [{"type": "text", "text": content}]
+        texts, images = [], 0
         for i, part in enumerate(content or []):
             if not isinstance(part, dict): continue
             if part.get("type") == "tool_result":
@@ -247,15 +254,17 @@ for raw in data[:end].splitlines():
             elif part.get("type") == "text":
                 text = part.get("text", "").strip()
                 if text.startswith("<bash-input>"):
-                    emit(k="user", id=f"{uid}-{i}", t="! " + text.replace("<bash-input>", "").replace("</bash-input>", "").strip())
+                    texts.append("! " + text.replace("<bash-input>", "").replace("</bash-input>", "").strip())
+                elif not text or text.startswith(HIDDEN):
                     continue
-                if not text or text.startswith(HIDDEN): continue
-                if text.startswith("[Request interrupted"):
+                elif text.startswith("[Request interrupted"):
                     emit(k="note", id=f"{uid}-{i}", t="You stopped Claude")
                 else:
-                    emit(k="user", id=f"{uid}-{i}", t=cut(text, 20000))
+                    texts.append(text)
             elif part.get("type") == "image":
-                emit(k="user", id=f"{uid}-{i}", t="[image]")
+                images += 1
+        if texts or images:
+            emit(k="user", id=uid, t=cut("\n\n".join(texts), 20000), img=images)
     elif t == "assistant":
         for i, part in enumerate(content or []):
             if not isinstance(part, dict): continue

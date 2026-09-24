@@ -720,13 +720,25 @@ final class TmuxModel: ObservableObject {
 
     /// Types `text` into the window and presses Enter. Uses a bracketed paste so
     /// multi-line messages arrive as one message instead of one per line.
-    func send(text: String, to w: TmuxWindow) {
-        if let id = w.claude?.sessionID { chatStore(for: id).addSending(text) }
+    func send(text: String, images: [String] = [], to w: TmuxWindow) {
+        if let id = w.claude?.sessionID { chatStore(for: id).addSending(text, images: images.count) }
         let t = sq(target(w))
+        // Each image path is pasted on its own, like dragging an image into Claude's terminal.
+        let imagePaste = images.map { path in
+            "tmux set-buffer -b deck-img -- \(sq(path)) && tmux paste-buffer -p -d -b deck-img -t \(t) && sleep 0.5 && "
+        }.joined()
+        if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            Task {
+                let result = await Remote.run(imagePaste + "tmux send-keys -t \(t) Enter")
+                if !result.ok { flash("Couldn't send that. Check the connection.") }
+                await refresh()
+            }
+            return
+        }
         // Paste, press Enter, then check the text didn't stay in the input line
         // (an Enter that lands mid-redraw can be dropped) and press it once more if so.
         let script = """
-        f=$(mktemp) && cat > "$f" && tmux load-buffer -b deck-compose "$f" && tmux paste-buffer -p -d -b deck-compose -t \(t) \
+        \(imagePaste)f=$(mktemp) && cat > "$f" && tmux load-buffer -b deck-compose "$f" && tmux paste-buffer -p -d -b deck-compose -t \(t) \
           && sleep 0.3 && tmux send-keys -t \(t) Enter && sleep 0.7 \
           && first=$(head -n1 "$f" | cut -c1-40) \
           && if [ -n "$first" ] && tmux capture-pane -p -t \(t) | tail -8 | grep -F -q -- "❯ $first"; then tmux send-keys -t \(t) Enter; fi
