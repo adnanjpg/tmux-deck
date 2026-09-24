@@ -189,13 +189,14 @@ final class LayoutModel: ObservableObject {
         syncSelection()
     }
 
-    /// Sidebar click: show the window in the focused tile, or jump to it if it's already on screen.
+    /// Sidebar click: jump to the window if it's already in a tile; otherwise open it
+    /// on its own, closing the split (splits are made by dragging or "Open to the right").
     func show(_ tag: String) {
         if let existing = root.leaves.first(where: { $0.tag == tag }) {
             focus(existing.id)
             return
         }
-        commit(root.mapLeaf(focused) { _ in .leaf(id: self.focused, tag: tag) }, animated: false)
+        commit(.leaf(id: focused, tag: tag), focus: focused, animated: isSplit)
     }
 
     /// Drops a window (sidebar tag) onto a tile.
