@@ -14,6 +14,7 @@ struct ChatItem: Identifiable, Equatable, Codable {
     var result: String?
     var isError = false
     var images: Int? = nil
+    var background: Bool? = nil
 }
 
 struct PendingMessage: Identifiable, Equatable {
@@ -87,7 +88,7 @@ final class ChatStore: ObservableObject {
 
     private var cacheURL: URL {
         let dir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("TmuxDeck/chats-v5", isDirectory: true)
+            .appendingPathComponent("TmuxDeck/chats-v6", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir.appendingPathComponent("\(sessionID).json")
     }
@@ -156,7 +157,8 @@ final class ChatStore: ObservableObject {
                 fresh.append(ChatItem(id: id, kind: .tool(name: obj["name"] as? String ?? "Tool",
                                                           summary: obj["s"] as? String ?? "",
                                                           added: obj["add"] as? Int ?? 0,
-                                                          removed: obj["rem"] as? Int ?? 0)))
+                                                          removed: obj["rem"] as? Int ?? 0),
+                                      background: (obj["bg"] as? Bool) == true ? true : nil))
             case "result":
                 let target = obj["for"] as? String ?? ""
                 if let i = fresh.lastIndex(where: { $0.id == target }) {
@@ -309,7 +311,8 @@ for raw in data[:end].splitlines():
                 elif isinstance(inp, dict) and isinstance(inp.get("content"), str):
                     add = inp["content"].count("\n") + 1
                 emit(k="tool", id=part.get("id", f"{uid}-{i}"), name=part.get("name", "Tool"),
-                     s=cut(summary(part.get("name"), inp), 400), add=add, rem=rem)
+                     s=cut(summary(part.get("name"), inp), 400), add=add, rem=rem,
+                     bg=bool(isinstance(inp, dict) and inp.get("run_in_background")))
 
 if off == 0:
     keep = ("result", "q+", "q-", "qx")

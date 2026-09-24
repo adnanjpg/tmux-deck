@@ -801,6 +801,43 @@ final class TmuxModel: ObservableObject, Identifiable {
         }
     }
 
+    /// Presses Shift+Tab until Claude's mode line shows `mode` (up to 7 presses).
+    func setMode(_ mode: ClaudeMode, in w: TmuxWindow) {
+        let t = sq(target(w))
+        let markers = ClaudeMode.allCases.compactMap(\.marker)
+        let check: String
+        if let m = mode.marker {
+            check = "grep -qi \(sq(m))"
+        } else {
+            check = "! grep -qiE \(sq(markers.joined(separator: "|")))"
+        }
+        let script = """
+        footer() { tmux capture-pane -p -t \(t) | sed 's/\\xc2\\xa0/ /g' | tail -6; }
+        for i in 1 2 3 4 5 6 7; do footer | \(check) && exit 0; tmux send-keys -t \(t) BTab; sleep 0.5; done
+        exit 3
+        """
+        Task {
+            let result = await remote.run(script)
+            if result.status == 3 { flash("\(mode.title) isn't available in this session.") }
+            await refresh()
+        }
+    }
+
+    /// Runs a Claude slash command that opens a screen (like /usage), reads it, and closes it.
+    func captureClaudeScreen(command: String, in w: TmuxWindow) async -> String {
+        let t = sq(target(w))
+        let script = """
+        tmux send-keys -t \(t) -l \(sq(command)) && sleep 0.3 && tmux send-keys -t \(t) Enter && sleep 2.2 \
+          && tmux capture-pane -p -t \(t) ; tmux send-keys -t \(t) Escape
+        """
+        let result = await remote.run(script, timeout: 20)
+        let lines = stripANSI(result.stdout).split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        // Keep the part above Claude's input box, trimmed of blank edges.
+        let rules = lines.indices.filter { lines[$0].trimmingCharacters(in: .whitespaces).hasPrefix("───") }
+        let body = rules.count >= 2 ? Array(lines[..<rules[rules.count - 2]]) : lines
+        return body.suffix(40).joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     /// Sends tmux key names (Enter, Escape, Up, BTab, C-c…) or, with `literal`, plain characters.
     func send(keys: [String], to w: TmuxWindow, literal: Bool = false) {
         let script = "tmux send-keys -t \(sq(target(w))) \(literal ? "-l " : "")" + keys.map(sq).joined(separator: " ")
