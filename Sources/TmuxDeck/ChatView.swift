@@ -9,10 +9,15 @@ struct ChatView: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            if !turns.isEmpty { chatHeader }
+            ScrollViewReader { proxy in
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 14) {
-                    ForEach(store.items) { item in
-                        ChatRow(item: item)
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    ForEach(turns) { turn in
+                        TurnView(turn: turn, store: store)
+                    }
+                    ForEach(Array(store.queued.enumerated()), id: \.offset) { _, text in
+                        QueuedMessage(text: text)
                     }
                     if let activity = model.activities[window.id] {
                         ActivityView(activity: activity, working: window.state == .claudeWorking)
@@ -28,8 +33,11 @@ struct ChatView: View {
                 .padding(.horizontal, 24)
                 .padding(.vertical, 20)
                 .frame(maxWidth: .infinity)
+                Color.clear.frame(height: 1).id("bottom")
             }
             .defaultScrollAnchor(.bottom)
+            .onAppear { DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { proxy.scrollTo("bottom", anchor: .bottom) } }
+            .onChange(of: store.loaded) { _, _ in proxy.scrollTo("bottom", anchor: .bottom) }
             .overlay(alignment: .topTrailing) {
                 if store.refreshing && store.loaded {
                     HStack(spacing: 6) {
@@ -54,6 +62,7 @@ struct ChatView: View {
                                            description: Text("Send Claude a message to get started."))
                 }
             }
+            }
             Divider()
             ComposeBar(window: window)
                 .id(window.id)
@@ -66,6 +75,201 @@ struct ChatView: View {
                 await store.poll()
             }
         }
+    }
+}
+
+extension ChatView {
+    private var turns: [Turn] { Turn.group(store.items) }
+
+    private var chatHeader: some View {
+        let ids = turns.flatMap { $0.cardIDs }
+        let allCollapsed = !ids.isEmpty && ids.allSatisfy(store.collapsed.contains)
+        return HStack(spacing: 10) {
+            Text("\(turns.count) \(turns.count == 1 ? "turn" : "turns")")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Spacer()
+            Button {
+                withAnimation(.snappy) { store.collapsed = Set(ids) }
+            } label: {
+                Label("Collapse all", systemImage: "rectangle.compress.vertical")
+            }
+            .disabled(allCollapsed)
+            Button {
+                withAnimation(.snappy) { store.collapsed = [] }
+            } label: {
+                Label("Expand all", systemImage: "rectangle.expand.vertical")
+            }
+            .disabled(store.collapsed.isEmpty)
+        }
+        .buttonStyle(.borderless)
+        .controlSize(.small)
+        .labelStyle(.titleAndIcon)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 6)
+        .background(.bar)
+        .overlay(alignment: .bottom) { Divider() }
+    }
+}
+
+/// One exchange: your message and everything Claude did in reply.
+struct Turn: Identifiable {
+    var user: ChatItem?
+    var replies: [ChatItem] = []
+
+    var id: String { user?.id ?? replies.first?.id ?? UUID().uuidString }
+    var replyID: String { "reply-" + id }
+    var cardIDs: [String] { (user.map { [$0.id] } ?? []) + (replies.isEmpty ? [] : [replyID]) }
+
+    static func group(_ items: [ChatItem]) -> [Turn] {
+        var turns: [Turn] = []
+        for item in items {
+            if case .user = item.kind {
+                turns.append(Turn(user: item))
+            } else if turns.isEmpty {
+                turns.append(Turn(user: nil, replies: [item]))
+            } else {
+                turns[turns.count - 1].replies.append(item)
+            }
+        }
+        return turns
+    }
+
+    /// One-line summary of Claude's reply for the collapsed view: its last message and what it did.
+    var replySummary: (text: String, detail: String) {
+        var lastText: String?
+        var tools = 0, thoughts = 0
+        for r in replies {
+            switch r.kind {
+            case .assistant(let t): lastText = t
+            case .tool: tools += 1
+            case .thinking: thoughts += 1
+            default: break
+            }
+        }
+        let line = lastText.map { t in
+            t.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }
+                .first { !$0.isEmpty && !$0.hasPrefix("```") } ?? ""
+        } ?? ""
+        var parts: [String] = []
+        if tools > 0 { parts.append("\(tools) tool \(tools == 1 ? "call" : "calls")") }
+        if thoughts > 0 { parts.append("thought \(thoughts)×") }
+        return (line.replacingOccurrences(of: "**", with: ""), parts.joined(separator: " · "))
+    }
+}
+
+struct TurnView: View {
+    let turn: Turn
+    @ObservedObject var store: ChatStore
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            if let user = turn.user, case .user(let text) = user.kind {
+                MessageCard(role: .you, collapsed: binding(user.id),
+                            summary: text.split(separator: "\n").first.map(String.init) ?? text, detail: "") {
+                    Text(text)
+                        .textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            if !turn.replies.isEmpty {
+                let summary = turn.replySummary
+                MessageCard(role: .claude, collapsed: binding(turn.replyID),
+                            summary: summary.text, detail: summary.detail) {
+                    VStack(alignment: .leading, spacing: 12) {
+                        ForEach(turn.replies) { ChatRow(item: $0) }
+                    }
+                }
+            }
+        }
+        .padding(.vertical, 14)
+        .overlay(alignment: .bottom) { Divider().opacity(0.6) }
+    }
+
+    private func binding(_ id: String) -> Binding<Bool> {
+        Binding(get: { store.collapsed.contains(id) },
+                set: { if $0 { store.collapsed.insert(id) } else { store.collapsed.remove(id) } })
+    }
+}
+
+struct MessageCard<Content: View>: View {
+    enum Role { case you, claude }
+    let role: Role
+    @Binding var collapsed: Bool
+    let summary: String
+    let detail: String
+    @ViewBuilder let content: Content
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Button {
+                withAnimation(.snappy) { collapsed.toggle() }
+            } label: {
+                HStack(spacing: 8) {
+                    avatar
+                    Text(role == .you ? "You" : "Claude").fontWeight(.semibold)
+                    if collapsed {
+                        Text(summary)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                        if !detail.isEmpty {
+                            Text(detail).font(.caption).foregroundStyle(.tertiary).fixedSize()
+                        }
+                    }
+                    Spacer(minLength: 8)
+                    Image(systemName: "chevron.down")
+                        .rotationEffect(.degrees(collapsed ? -90 : 0))
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.tertiary)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help(collapsed ? "Expand" : "Collapse")
+
+            if !collapsed {
+                content
+                    .padding(.leading, 30)
+                    .transition(.opacity)
+            }
+        }
+        .padding(role == .you ? 12 : 0)
+        .background {
+            if role == .you {
+                RoundedRectangle(cornerRadius: 12).fill(Color.accentColor.opacity(0.09))
+                RoundedRectangle(cornerRadius: 12).strokeBorder(Color.accentColor.opacity(0.18))
+            }
+        }
+    }
+
+    private var avatar: some View {
+        ZStack {
+            Circle().fill(role == .you ? Color.accentColor : Color.orange.opacity(0.85))
+            Image(systemName: role == .you ? "person.fill" : "sparkle")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(.white)
+        }
+        .frame(width: 22, height: 22)
+    }
+}
+
+struct QueuedMessage: View {
+    let text: String
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: "clock").foregroundStyle(.secondary).frame(width: 22)
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Queued — Claude will read this next").font(.caption).foregroundStyle(.secondary)
+                Text(text).textSelection(.enabled).foregroundStyle(.secondary)
+            }
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 12).strokeBorder(style: StrokeStyle(lineWidth: 1, dash: [4, 3]))
+            .foregroundStyle(.tertiary))
+        .padding(.vertical, 10)
     }
 }
 
@@ -129,7 +333,7 @@ struct ActivityView: View {
                 .padding(.leading, 22)
             }
         }
-        .padding(.top, 4)
+        .padding(.top, 14)
         .animation(.easeOut(duration: 0.2), value: activity)
     }
 }

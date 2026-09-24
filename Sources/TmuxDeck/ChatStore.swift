@@ -26,6 +26,10 @@ final class ChatStore: ObservableObject {
     @Published private(set) var missing = false
     /// True while catching up after you open the chat.
     @Published private(set) var refreshing = false
+    /// Messages you sent while Claude was busy that it hasn't read yet.
+    @Published private(set) var queued: [String] = []
+    /// Message ids you've collapsed in this chat.
+    @Published var collapsed: Set<String> = []
 
     private var offset = 0
     private var toolIndex: [String: Int] = [:]
@@ -35,6 +39,7 @@ final class ChatStore: ObservableObject {
     private struct Snapshot: Codable {
         var offset: Int
         var items: [ChatItem]
+        var queued: [String]?
     }
 
     init(sessionID: String) {
@@ -43,6 +48,7 @@ final class ChatStore: ObservableObject {
            let snapshot = try? JSONDecoder().decode(Snapshot.self, from: data) {
             items = snapshot.items
             offset = snapshot.offset
+            queued = snapshot.queued ?? []
             loaded = true
             rebuildToolIndex()
         }
@@ -50,7 +56,7 @@ final class ChatStore: ObservableObject {
 
     private var cacheURL: URL {
         let dir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("TmuxDeck/chats-v2", isDirectory: true)
+            .appendingPathComponent("TmuxDeck/chats-v3", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir.appendingPathComponent("\(sessionID).json")
     }
@@ -63,7 +69,7 @@ final class ChatStore: ObservableObject {
     }
 
     private func save() {
-        let snapshot = Snapshot(offset: offset, items: items)
+        let snapshot = Snapshot(offset: offset, items: items, queued: queued)
         let url = cacheURL
         Task.detached(priority: .utility) {
             if let data = try? JSONEncoder().encode(snapshot) { try? data.write(to: url, options: .atomic) }
@@ -86,6 +92,7 @@ final class ChatStore: ObservableObject {
         guard result.ok else { return }
         var fresh: [ChatItem] = []
         var working = items
+        var queue = queued
         for line in result.stdout.split(separator: "\n") {
             guard let obj = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any],
                   let k = obj["k"] as? String else { continue }
@@ -97,7 +104,11 @@ final class ChatStore: ObservableObject {
             case "missing":
                 missing = true
             case "reset":
-                working = []; toolIndex = [:]
+                working = []; toolIndex = [:]; queue = []
+            case "q+": queue.append(text)
+            case "q-": if !queue.isEmpty { queue.removeFirst() }
+            case "qx":
+                if let i = queue.firstIndex(of: text) { queue.remove(at: i) } else if !queue.isEmpty { queue.removeFirst() }
             case "user": fresh.append(ChatItem(id: id, kind: .user(text)))
             case "text": fresh.append(ChatItem(id: id, kind: .assistant(text)))
             case "note": fresh.append(ChatItem(id: id, kind: .note(text)))
@@ -123,6 +134,7 @@ final class ChatStore: ObservableObject {
             items = working
             rebuildToolIndex()
         }
+        if queue != queued { queued = queue }
         loaded = true
         if offset != startOffset { save() }
     }
@@ -182,6 +194,20 @@ for raw in data[:end].splitlines():
     uid = d.get("uuid", "")
     msg = d.get("message") or {}
     content = msg.get("content")
+    if t == "attachment":
+        a = d.get("attachment") or {}
+        if a.get("type") == "queued_command" and isinstance(a.get("prompt"), str) and a["prompt"].strip():
+            emit(k="user", id=uid, t=cut(a["prompt"].strip(), 20000))
+        continue
+    if t == "queue-operation":
+        op = d.get("operation")
+        if op == "enqueue" and isinstance(d.get("content"), str):
+            emit(k="q+", t=d["content"])
+        elif op == "dequeue":
+            emit(k="q-")
+        elif op == "remove":
+            emit(k="qx", t=d.get("content") if isinstance(d.get("content"), str) else "")
+        continue
     if t == "user":
         if isinstance(content, str):
             content = [{"type": "text", "text": content}]
@@ -191,6 +217,9 @@ for raw in data[:end].splitlines():
                 emit(k="result", **{"for": part.get("tool_use_id", "")}, t=cut(result_text(part.get("content")), 4000), err=bool(part.get("is_error")))
             elif part.get("type") == "text":
                 text = part.get("text", "").strip()
+                if text.startswith("<bash-input>"):
+                    emit(k="user", id=f"{uid}-{i}", t="! " + text.replace("<bash-input>", "").replace("</bash-input>", "").strip())
+                    continue
                 if not text or text.startswith(HIDDEN): continue
                 if text.startswith("[Request interrupted"):
                     emit(k="note", id=f"{uid}-{i}", t="You stopped Claude")
@@ -217,7 +246,8 @@ for raw in data[:end].splitlines():
                      s=cut(summary(part.get("name"), inp), 400), add=add, rem=rem)
 
 if off == 0:
-    out = [o for o in out if o["k"] != "result"][-600:] + [o for o in out if o["k"] == "result"]
+    keep = ("result", "q+", "q-", "qx")
+    out = [o for o in out if o["k"] not in keep][-600:] + [o for o in out if o["k"] in keep]
 for o in out: print(json.dumps(o))
 print(json.dumps({"k": "end", "off": new_off}))
 """#
