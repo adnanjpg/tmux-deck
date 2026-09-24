@@ -28,6 +28,7 @@ struct ContentView: View {
     /// The server a menu action applies to (it may not be the one on screen).
     @State private var target: TmuxModel?
     @EnvironmentObject private var app: AppModel
+    @ObservedObject private var layout = LayoutModel.shared
 
     enum RenameTarget: Identifiable {
         case window(TmuxWindow), session(String)
@@ -114,7 +115,8 @@ struct ContentView: View {
     // MARK: Sidebar
 
     private var sidebar: some View {
-        List(selection: Binding(get: { app.selectionTag }, set: { app.select(tag: $0) })) {
+        List(selection: Binding(get: { layout.focusedTag ?? app.selectionTag },
+                                set: { if let t = $0 { layout.show(t) } })) {
             ForEach(app.servers) { server in
                 Section(isExpanded: isExpanded(server.host)) {
                     serverRows(server)
@@ -189,7 +191,7 @@ struct ContentView: View {
                 WindowRow(window: window, title: server.displayTitle(window))
                     .tag(tag(window.id))
                     .contextMenu { windowMenu(window, server) }
-                    .draggable(window.id)
+                    .draggable("\(server.host)#\(window.id)")
                     .dropDestination(for: String.self) { ids, _ in
                         server.handleDrop(ids, onto: window, session: session.name)
                     }
@@ -198,7 +200,7 @@ struct ContentView: View {
                         .padding(.leading, 20)
                         .tag(tag(pane.id))
                         .contextMenu { paneMenu(pane, server) }
-                        .draggable(pane.id)
+                        .draggable("\(server.host)#\(pane.id)")
                 }
             }
         }
@@ -218,6 +220,9 @@ struct ContentView: View {
     }
 
     @ViewBuilder private func windowMenu(_ window: TmuxWindow, _ m: TmuxModel) -> some View {
+        Button("Open to the right") { layout.drop(tag: "\(m.host)#\(window.id)", onto: layout.focused, zone: .right) }
+        Button("Open below") { layout.drop(tag: "\(m.host)#\(window.id)", onto: layout.focused, zone: .bottom) }
+        Divider()
         Button("Rename…") { target = m; renameText = window.title; renaming = .window(window) }
         Divider()
         Button("Split right") { m.userSelected(window.id); m.split(vertical: false) }
@@ -243,6 +248,9 @@ struct ContentView: View {
     }
 
     @ViewBuilder private func paneMenu(_ pane: TmuxWindow, _ m: TmuxModel) -> some View {
+        Button("Open to the right") { layout.drop(tag: "\(m.host)#\(pane.id)", onto: layout.focused, zone: .right) }
+        Button("Open below") { layout.drop(tag: "\(m.host)#\(pane.id)", onto: layout.focused, zone: .bottom) }
+        Divider()
         Button("Move to its own window") { m.breakPane(pane) }
         Menu("Move into window") {
             ForEach(m.sessions) { session in
@@ -300,38 +308,82 @@ struct ContentView: View {
 
     // MARK: Detail
 
-    @ViewBuilder private var detail: some View {
-        if let window = model.selectedWindow {
-            Group {
-                if model.rawTerminal.contains(window.id) || window.state.isRunningProgram {
-                    TerminalPane(controller: model.controller(for: window.session), window: window)
-                        .id(window.session)
-                } else if let claude = window.claude {
-                    ChatView(window: window, store: model.chatStore(for: claude.sessionID))
-                        .id(claude.sessionID)
-                } else if window.state.isClaude {
-                    ProgressView("Starting Claude…")
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else {
-                    ConsoleView(window: window)
-                        .id(window.id)
-                }
+    private var detail: some View {
+        SplitLayoutView(layout: layout) { leafID, tag in
+            tileContent(leafID: leafID, tag: tag)
+        }
+        .overlay(alignment: .top) {
+            if let toast = model.toast {
+                Text(toast)
+                    .font(.callout)
+                    .padding(.horizontal, 14).padding(.vertical, 8)
+                    .background(.regularMaterial, in: Capsule())
+                    .padding(.top, 12)
+                    .transition(.move(edge: .top).combined(with: .opacity))
             }
-                .overlay(alignment: .top) {
-                    if let toast = model.toast {
-                        Text(toast)
-                            .font(.callout)
-                            .padding(.horizontal, 14).padding(.vertical, 8)
-                            .background(.regularMaterial, in: Capsule())
-                            .padding(.top, 12)
-                            .transition(.move(edge: .top).combined(with: .opacity))
-                    }
-                }
-                .animation(.snappy, value: model.toast)
+        }
+        .animation(.snappy, value: model.toast)
+        .onAppear {
+            if layout.focusedTag == nil, let t = app.selectionTag { layout.show(t) } else { layout.syncSelection() }
+        }
+        .onChange(of: app.selectionTag) { _, t in
+            // First launch: fill the empty tile once a server has a window selected.
+            if layout.focusedTag == nil, let t { layout.show(t) }
+        }
+    }
+
+    @ViewBuilder private func tileContent(leafID: String, tag: String?) -> some View {
+        if let tag, let (server, window) = TileResolver.resolve(tag) {
+            windowContent(server: server, window: window, terminalAllowed: terminalOwner(for: tag) == leafID)
+                .environmentObject(server)
+        } else if let tag, let hash = tag.firstIndex(of: "#"),
+                  let server = app.server(String(tag[..<hash])), !server.connected || server.sessions.isEmpty {
+            ProgressView("Connecting to \(server.host)…").frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else if tag != nil {
+            ContentUnavailableView {
+                Label("Window closed", systemImage: "xmark.rectangle")
+            } description: {
+                Text("That window no longer exists.")
+            } actions: {
+                if layout.isSplit { Button("Close tile") { layout.close(leafID) } }
+            }
         } else {
             ContentUnavailableView("Pick a window", systemImage: "sidebar.left",
-                                   description: Text("Choose a window from the sidebar."))
+                                   description: Text("Choose a window from the sidebar, or drag one here."))
         }
+    }
+
+    @ViewBuilder private func windowContent(server: TmuxModel, window: TmuxWindow, terminalAllowed: Bool) -> some View {
+        if server.rawTerminal.contains(window.id) || window.state.isRunningProgram {
+            if terminalAllowed {
+                TerminalPane(controller: server.controller(for: window.session), window: window)
+                    .id(window.session)
+            } else {
+                ContentUnavailableView("Terminal shown in another tile", systemImage: "apple.terminal",
+                                       description: Text("A tmux session's raw terminal can be in one tile at a time."))
+            }
+        } else if let claude = window.claude {
+            ChatView(window: window, store: server.chatStore(for: claude.sessionID))
+                .id(claude.sessionID)
+        } else if window.state.isClaude {
+            ProgressView("Starting Claude…")
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else {
+            ConsoleView(window: window)
+                .id(window.id)
+        }
+    }
+
+    /// One tmux session has one raw terminal view, so only one tile can show it:
+    /// the focused tile if it's one of them, otherwise the first.
+    private func terminalOwner(for tag: String) -> String? {
+        guard let (server, window) = TileResolver.resolve(tag) else { return nil }
+        let rawTiles = layout.root.leaves.filter { leaf in
+            guard let t = leaf.tag, let (s, w) = TileResolver.resolve(t) else { return false }
+            return s.host == server.host && w.session == window.session
+                && (s.rawTerminal.contains(w.id) || w.state.isRunningProgram)
+        }
+        return rawTiles.first { $0.id == layout.focused }?.id ?? rawTiles.first?.id
     }
 
     // MARK: Toolbar

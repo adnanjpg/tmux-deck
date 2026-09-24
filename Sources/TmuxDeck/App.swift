@@ -30,6 +30,8 @@ struct TmuxDeckApp: App {
                     .keyboardShortcut("d")
                 Button("Split down") { model?.split(vertical: true) }
                     .keyboardShortcut("d", modifiers: [.command, .shift])
+                Button("Close other tiles") { LayoutModel.shared.unsplit() }
+                    .keyboardShortcut("u", modifiers: [.command, .shift])
                 Button("Show as terminal") { model?.toggleRawTerminal() }
                     .keyboardShortcut("t", modifiers: [.command, .option])
                 Divider()

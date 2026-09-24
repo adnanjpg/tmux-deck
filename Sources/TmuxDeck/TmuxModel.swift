@@ -143,6 +143,7 @@ final class TmuxModel: ObservableObject, Identifiable {
     var drafts: [String: String] = [:]
 
     private(set) var needsYouCount = 0
+    private var lastClaude: [String: (ClaudeSessionInfo, Date)] = [:]
     private var terminals: [String: TerminalController] = [:]
     private var chatStores: [String: ChatStore] = [:]
     private var prefetched = Set<String>()
@@ -185,7 +186,8 @@ final class TmuxModel: ObservableObject, Identifiable {
           kill -0 "$(basename "$f" .json)" 2>/dev/null || continue
           printf '@@SES '; tr -d '\\n' < "$f"; echo
         done
-        for w in $(tmux list-panes -a -f '#{m:*claude*,#{pane_current_command}}' -F '#{pane_id}' 2>/dev/null | sort -u); do
+        claude_panes=$(for f in ~/.claude/sessions/*.json; do [ -f "$f" ] && kill -0 "$(basename "$f" .json)" 2>/dev/null && grep -o '"tmux":"[^"]*"' "$f" | grep -o '%[0-9]*'; done)
+        for w in $( (tmux list-panes -a -f '#{m:*claude*,#{pane_current_command}}' -F '#{pane_id}' 2>/dev/null; echo "$claude_panes") | grep . | sort -u); do
           printf '@@CAP %s\\n' "$w"
           tmux capture-pane -e -p -t "$w" 2>/dev/null | tail -30
         done
@@ -247,9 +249,19 @@ final class TmuxModel: ObservableObject, Identifiable {
             }
             let command = f[4], paneID = f[8]
             let raw = captures[paneID] ?? []
-            let claudeInfo = command.contains("claude") ? claudeByPane[paneID]?.info : nil
+            // Claude's own session record is the source of truth: while Claude runs a
+            // build or script, that program is briefly the pane's foreground command,
+            // and the window must not flip away from the chat. A record that's missing
+            // for one refresh (file mid-write) is bridged for 20 seconds.
+            var claudeInfo = claudeByPane[paneID]?.info
+            if let info = claudeInfo {
+                lastClaude[paneID] = (info, Date())
+            } else if let last = lastClaude[paneID], Date().timeIntervalSince(last.1) < 20 {
+                claudeInfo = last.0
+            }
+            let isClaude = claudeInfo != nil || command.contains("claude")
             let state: WindowState
-            if command.contains("claude") {
+            if isClaude {
                 let plain = raw.map(stripANSI).filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
                 state = Self.claudeState(Array(plain.suffix(12)), info: claudeInfo)
             } else if ["bash", "zsh", "sh", "fish"].contains(command) {
@@ -614,7 +626,11 @@ final class TmuxModel: ObservableObject, Identifiable {
 
     /// Drag and drop in the sidebar. `ids` are dragged item ids.
     func handleDrop(_ ids: [String], onto w: TmuxWindow?, session: String) -> Bool {
-        guard let id = ids.first else { return false }
+        guard var id = ids.first, !id.hasPrefix("tile:") else { return false }
+        if let hash = id.firstIndex(of: "#") {
+            guard id[..<hash] == host else { return false }   // windows can't move between servers
+            id = String(id[id.index(after: hash)...])
+        }
         let all = sessions.flatMap(\.windows).flatMap { [$0] + $0.paneItems }
         guard let dragged = all.first(where: { $0.id == id }) else { return false }
         if dragged.isPane {
@@ -626,6 +642,15 @@ final class TmuxModel: ObservableObject, Identifiable {
             moveWindow(dragged, toSession: session)
         }
         return true
+    }
+
+    /// A window or pane by its sidebar id.
+    func item(_ id: String) -> TmuxWindow? {
+        for w in sessions.lazy.flatMap(\.windows) {
+            if w.id == id { return w }
+            if let p = w.paneItems.first(where: { $0.id == id }) { return p }
+        }
+        return nil
     }
 
     func window(containing pane: TmuxWindow) -> TmuxWindow? {
