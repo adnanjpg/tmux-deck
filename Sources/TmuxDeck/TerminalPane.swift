@@ -39,6 +39,7 @@ struct TerminalPane: View {
             .onChange(of: window.id) { _, _ in
                 controller.show(windowID: window.windowID, paneID: window.isPane ? window.paneID : nil)
             }
+            .onDisappear { controller.releaseZoom() }
     }
 }
 

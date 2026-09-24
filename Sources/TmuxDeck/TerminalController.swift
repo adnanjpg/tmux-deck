@@ -39,17 +39,42 @@ final class TerminalController: NSObject, LocalProcessTerminalViewDelegate {
     }
 
     /// Connects if needed and brings `windowID` to the front.
+    /// The pane this app zoomed so a single-pane tile shows only that pane.
+    private var zoomedPane: String?
+
+    /// Connects if needed and brings `windowID` to the front. With `paneID`, that
+    /// pane is zoomed to fill the view (a tile showing one pane shouldn't show its
+    /// neighbours); showing the whole window undoes a zoom this app made.
     func show(windowID: String, paneID: String? = nil) {
+        let wasAlive = alive
         if !alive {
             connect(initialWindow: windowID)
         } else {
             Task { _ = await remote.run("tmux select-window -t \(sq(viewSession + ":" + windowID))") }
         }
-        if let paneID {
-            Task {
-                try? await Task.sleep(for: .milliseconds(alive ? 0 : 800))
-                _ = await remote.run("tmux select-pane -t \(sq(paneID))")
+        let previous = zoomedPane
+        zoomedPane = paneID
+        Task {
+            if !wasAlive { try? await Task.sleep(for: .milliseconds(800)) }
+            var script = ""
+            if let previous, previous != paneID {
+                script += "[ \"$(tmux display -p -t \(sq(previous)) '#{window_zoomed_flag}')\" = 1 ] && tmux resize-pane -Z -t \(sq(previous)); "
             }
+            if let paneID {
+                let p = sq(paneID)
+                // select-pane on another pane of a zoomed window unzooms it, so zoom after selecting.
+                script += "tmux select-pane -t \(p) && { [ \"$(tmux display -p -t \(p) '#{window_zoomed_flag}')\" = 1 ] || tmux resize-pane -Z -t \(p); }"
+            }
+            if !script.isEmpty { _ = await remote.run(script) }
+        }
+    }
+
+    /// Undoes this app's zoom when the terminal tile goes away.
+    func releaseZoom() {
+        guard let pane = zoomedPane else { return }
+        zoomedPane = nil
+        Task {
+            _ = await remote.run("[ \"$(tmux display -p -t \(sq(pane)) '#{window_zoomed_flag}')\" = 1 ] && tmux resize-pane -Z -t \(sq(pane)); true")
         }
     }
 
