@@ -8,7 +8,7 @@ tmux stays the backend. Your sessions keep running on the server when the app cl
 - **Claude windows as a chat.** Your messages, Claude's formatted replies, and each tool call as a row you click to expand. Text selects and copies like any Mac app. Conversations are cached on disk, so switching is instant.
 - **A real Mac input box.** ⌘A, ⌥⌫, ⌘⌫, ⌥←/→, ⌘Z and mouse selection all work. Enter sends, Shift+Enter adds a new line. Claude's suggested next message shows faded; Tab takes it.
 - **Buttons for Claude's permission questions**, a Stop button, and status in the sidebar (working, needs your answer, ready).
-- **Dock badge and notifications** when a Claude session finishes or needs you.
+- **A sound, Dock badge and notification** when a Claude session finishes or needs you. Pick the sounds in Settings (⌘,).
 - **Plain shell windows as a console:** selectable, searchable output (⌘F) with the same input box.
 - **Every tmux action as a button or menu item:** new window or session, split, even out panes, zoom, swap, move a pane into its own window or into another window, move windows between sessions, rename, close. You can also drag panes and windows around in the sidebar.
 - **A raw terminal view** (⌥⌘T) for anything interactive, like vim or htop.

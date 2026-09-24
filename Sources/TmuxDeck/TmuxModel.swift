@@ -145,6 +145,7 @@ final class TmuxModel: ObservableObject {
     }
 
     func start() {
+        Sounds.registerDefaults()
         MacKeys.install()
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { _, _ in }
         pollTask?.cancel()
@@ -434,24 +435,31 @@ final class TmuxModel: ObservableObject {
         NSApp.dockTile.badgeLabel = needsYou > 0 ? "\(needsYou)" : nil
 
         let appActive = NSApp.isActive
+        var finished = false, asking = false
         for w in windows {
             let before = previousStates[w.id]
             previousStates[w.id] = w.state
             guard let before, before != w.state else { continue }
+            let isFinish = before == .claudeWorking && w.state == .claudeReady
+            let isQuestion = w.state == .claudeNeedsYou
+            finished = finished || isFinish
+            asking = asking || isQuestion
+            // Banners only for chats you aren't looking at; the sound plays either way.
             if appActive && w.id == selection { continue }
-            if before == .claudeWorking && w.state == .claudeReady {
-                notify("Claude finished", "\(w.session) › \(w.title) is ready for you.")
-            } else if w.state == .claudeNeedsYou {
-                notify("Claude needs your answer", "\(w.session) › \(w.title) is waiting for approval.")
+            if isFinish {
+                notify("Claude finished", "\(w.session) › \(displayTitle(w)) is ready for you.")
+            } else if isQuestion {
+                notify("Claude needs your answer", "\(w.session) › \(displayTitle(w)) is waiting for you.")
             }
         }
+        if asking { Sounds.play(.question) } else if finished { Sounds.play(.finish) }
     }
 
     private func notify(_ title: String, _ body: String) {
         let content = UNMutableNotificationContent()
         content.title = title
         content.body = body
-        content.sound = .default
+        content.sound = nil   // Sounds.play handles sound, so it isn't doubled
         UNUserNotificationCenter.current().add(
             UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil))
     }
@@ -751,4 +759,30 @@ final class TmuxModel: ObservableObject {
 /// Removes terminal color and style codes.
 func stripANSI(_ s: String) -> String {
     s.replacingOccurrences(of: "\u{1b}\\[[0-9;?]*[A-Za-z]", with: "", options: .regularExpression)
+}
+
+/// The sounds played when Claude finishes or asks you something. Set in Settings.
+enum Sounds {
+    enum Event: String { case finish, question }
+
+    static let available = ["Glass", "Ping", "Hero", "Submarine", "Blow", "Bottle", "Frog", "Funk",
+                            "Morse", "Pop", "Purr", "Sosumi", "Tink", "Basso"]
+
+    static func registerDefaults() {
+        UserDefaults.standard.register(defaults: [
+            "sound.finish.on": true, "sound.finish.name": "Glass",
+            "sound.question.on": true, "sound.question.name": "Ping",
+        ])
+    }
+
+    static func play(_ event: Event) {
+        let d = UserDefaults.standard
+        guard d.bool(forKey: "sound.\(event.rawValue).on"),
+              let name = d.string(forKey: "sound.\(event.rawValue).name") else { return }
+        preview(name)
+    }
+
+    static func preview(_ name: String) {
+        NSSound(named: NSSound.Name(name))?.play()
+    }
 }

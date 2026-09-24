@@ -62,17 +62,46 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 struct SettingsView: View {
     @AppStorage("host") private var host = ""
     @AppStorage("fontSize") private var fontSize = 13.0
+    @AppStorage("sound.finish.on") private var finishOn = true
+    @AppStorage("sound.finish.name") private var finishSound = "Glass"
+    @AppStorage("sound.question.on") private var questionOn = true
+    @AppStorage("sound.question.name") private var questionSound = "Ping"
 
     var body: some View {
         Form {
-            TextField("SSH host", text: $host, prompt: Text("my-server"))
-            Text("A host name from ~/.ssh/config, or user@address.")
-                .font(.caption).foregroundStyle(.secondary)
-            Stepper("Font size: \(Int(fontSize)) pt", value: $fontSize, in: 9...24)
-            Text("Changes apply the next time you open the app.")
-                .font(.caption).foregroundStyle(.secondary)
+            Section("Sounds") {
+                soundRow("When Claude finishes", on: $finishOn, name: $finishSound)
+                soundRow("When Claude asks you something", on: $questionOn, name: $questionSound)
+            }
+            Section("Connection") {
+                TextField("SSH host", text: $host, prompt: Text("my-server"))
+                Text("A host name from ~/.ssh/config, or user@address.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            Section("Terminal") {
+                Stepper("Font size: \(Int(fontSize)) pt", value: $fontSize, in: 9...24)
+                Text("Applies the next time you open the app.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
         }
-        .padding(20)
-        .frame(width: 380)
+        .formStyle(.grouped)
+        .frame(width: 460)
+    }
+
+    private func soundRow(_ label: String, on: Binding<Bool>, name: Binding<String>) -> some View {
+        HStack {
+            Toggle(label, isOn: on)
+            Spacer()
+            Picker("", selection: name) {
+                ForEach(Sounds.available, id: \.self) { Text($0).tag($0) }
+            }
+            .labelsHidden()
+            .fixedSize()
+            .disabled(!on.wrappedValue)
+            .onChange(of: name.wrappedValue) { _, new in Sounds.preview(new) }
+            Button { Sounds.preview(name.wrappedValue) } label: { Image(systemName: "speaker.wave.2") }
+                .buttonStyle(.borderless)
+                .help("Play")
+        }
     }
 }
