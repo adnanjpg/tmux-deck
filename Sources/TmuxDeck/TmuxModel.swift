@@ -119,6 +119,8 @@ final class TmuxModel: ObservableObject {
     @Published var promptOptions: [String: [PromptOption]] = [:]
     /// Claude's own suggestion for the next message (the dim text in its input line).
     @Published var suggestions: [String: String] = [:]
+    /// The lines under Claude's input box (its status line, mode, hints) per item.
+    @Published var statusLines: [String: [String]] = [:]
     /// Claude's live status line per item.
     @Published var activities: [String: ClaudeActivity] = [:]
     /// Conversation titles Claude generated, by session id.
@@ -276,10 +278,12 @@ final class TmuxModel: ObservableObject {
         var options: [String: [PromptOption]] = [:]
         var newSuggestions: [String: String] = [:]
         var newActivities: [String: ClaudeActivity] = [:]
+        var newStatusLines: [String: [String]] = [:]
         let allItems = bySession.values.joined().flatMap { [$0] + $0.paneItems }
         for w in allItems where w.state.isClaude {
             let raw = captures[w.paneID] ?? []
             if let activity = Self.activity(raw) { newActivities[w.id] = activity }
+            if let lines = Self.footer(raw) { newStatusLines[w.id] = lines }
             if w.state == .claudeNeedsYou {
                 options[w.id] = Self.promptOptions(raw.suffix(15).map(stripANSI))
             } else if let suggestion = Self.suggestion(raw) {
@@ -289,6 +293,7 @@ final class TmuxModel: ObservableObject {
         if options != promptOptions { promptOptions = options }
         if newSuggestions != suggestions { suggestions = newSuggestions }
         if newActivities != activities { activities = newActivities }
+        if newStatusLines != statusLines { statusLines = newStatusLines }
         let claudeIDs = allItems.compactMap(\.claude?.sessionID)
         fetchMissingTitles(claudeIDs)
         prefetchChats(claudeIDs)
@@ -317,6 +322,14 @@ final class TmuxModel: ObservableObject {
             return ["busy", "running", "working", "compacting"].contains(status) ? .claudeWorking : .claudeReady
         }
         return text.contains("esc to interrupt") ? .claudeWorking : .claudeReady
+    }
+
+    /// The lines below Claude's input box: its status line, mode line and hints.
+    static func footer(_ rawLines: [String]) -> [String]? {
+        let lines = rawLines.map(stripANSI).filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
+        let rules = lines.indices.filter { lines[$0].trimmingCharacters(in: .whitespaces).hasPrefix("───") }
+        guard rules.count >= 2, let bottom = rules.last, bottom + 1 < lines.count else { return nil }
+        return Array(lines[(bottom + 1)...].prefix(6))
     }
 
     private static let spinnerGlyphs: Set<Character> = ["✻", "✽", "✢", "✳", "✶", "✷", "✸", "✹", "✺", "·", "*", "⏺", "●"]
@@ -708,6 +721,7 @@ final class TmuxModel: ObservableObject {
     /// Types `text` into the window and presses Enter. Uses a bracketed paste so
     /// multi-line messages arrive as one message instead of one per line.
     func send(text: String, to w: TmuxWindow) {
+        if let id = w.claude?.sessionID { chatStore(for: id).addSending(text) }
         let t = sq(target(w))
         // Paste, press Enter, then check the text didn't stay in the input line
         // (an Enter that lands mid-redraw can be dropped) and press it once more if so.
@@ -756,9 +770,10 @@ final class TmuxModel: ObservableObject {
     }
 }
 
-/// Removes terminal color and style codes.
+/// Removes terminal color and style codes, and hidden link markers (OSC 8).
 func stripANSI(_ s: String) -> String {
-    s.replacingOccurrences(of: "\u{1b}\\[[0-9;?]*[A-Za-z]", with: "", options: .regularExpression)
+    s.replacingOccurrences(of: "\u{1b}\\][^\u{07}\u{1b}]*(?:\u{07}|\u{1b}\\\\)", with: "", options: .regularExpression)
+        .replacingOccurrences(of: "\u{1b}\\[[0-9;?]*[A-Za-z]", with: "", options: .regularExpression)
 }
 
 /// The sounds played when Claude finishes or asks you something. Set in Settings.

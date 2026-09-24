@@ -19,6 +19,9 @@ struct ChatView: View {
                     ForEach(Array(store.queued.enumerated()), id: \.offset) { _, text in
                         QueuedMessage(text: text)
                     }
+                    ForEach(store.sending) { pending in
+                        SendingMessage(message: pending)
+                    }
                     if let activity = model.activities[window.id] {
                         ActivityView(activity: activity, working: window.state == .claudeWorking)
                     } else if window.state == .claudeWorking {
@@ -64,8 +67,12 @@ struct ChatView: View {
             }
             }
             Divider()
-            ComposeBar(window: window)
-                .id(window.id)
+            VStack(spacing: 0) {
+                ComposeBar(window: window)
+                    .id(window.id)
+                StatusBar(window: window)
+            }
+            .background(.bar)
         }
         .background(Color(nsColor: .textBackgroundColor))
         .task(id: store.sessionID) {
@@ -251,6 +258,46 @@ struct MessageCard<Content: View>: View {
                 .foregroundStyle(.white)
         }
         .frame(width: 22, height: 22)
+    }
+}
+
+/// Your message the moment you send it, greyed out until Claude's log confirms it.
+struct SendingMessage: View {
+    let message: PendingMessage
+
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 5)) { context in
+            let slow = context.date.timeIntervalSince(message.sentAt) > 30
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 8) {
+                    ZStack {
+                        Circle().fill(Color.secondary.opacity(0.35))
+                        Image(systemName: "person.fill").font(.system(size: 11, weight: .semibold)).foregroundStyle(.white)
+                    }
+                    .frame(width: 22, height: 22)
+                    Text("You").fontWeight(.semibold).foregroundStyle(.secondary)
+                    Spacer()
+                    if slow {
+                        Label("Not confirmed yet — check the terminal view", systemImage: "exclamationmark.triangle")
+                            .font(.caption).foregroundStyle(.orange)
+                    } else {
+                        HStack(spacing: 4) {
+                            ProgressView().controlSize(.mini)
+                            Text("Sending").font(.caption)
+                        }
+                        .foregroundStyle(.secondary)
+                    }
+                }
+                Text(message.text)
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+                    .padding(.leading, 30)
+            }
+            .padding(12)
+            .background(RoundedRectangle(cornerRadius: 12).fill(Color.secondary.opacity(0.07)))
+            .padding(.vertical, 14)
+        }
+        .transition(.opacity)
     }
 }
 

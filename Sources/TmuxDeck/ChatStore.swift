@@ -15,6 +15,20 @@ struct ChatItem: Identifiable, Equatable, Codable {
     var isError = false
 }
 
+struct PendingMessage: Identifiable, Equatable {
+    let id = UUID()
+    let text: String
+    let sentAt = Date()
+}
+
+/// Loosely compares a sent message with what Claude logged (whitespace can differ).
+private func sameMessage(_ a: String, _ b: String) -> Bool {
+    func norm(_ s: String) -> String {
+        String(s.split(whereSeparator: \.isWhitespace).joined(separator: " ").prefix(60))
+    }
+    return norm(a) == norm(b)
+}
+
 /// Follows a Claude Code conversation by reading its log on the work machine.
 /// The first read takes the last few MB; after that only new lines are fetched.
 /// What's been read is kept on disk, so reopening a chat (or the app) is instant.
@@ -28,6 +42,8 @@ final class ChatStore: ObservableObject {
     @Published private(set) var refreshing = false
     /// Messages you sent while Claude was busy that it hasn't read yet.
     @Published private(set) var queued: [String] = []
+    /// Messages you just sent that haven't shown up in Claude's log yet.
+    @Published private(set) var sending: [PendingMessage] = []
     /// Message ids you've collapsed in this chat.
     @Published var collapsed: Set<String> = []
 
@@ -74,6 +90,11 @@ final class ChatStore: ObservableObject {
         Task.detached(priority: .utility) {
             if let data = try? JSONEncoder().encode(snapshot) { try? data.write(to: url, options: .atomic) }
         }
+    }
+
+    /// Shows a message right away, greyed out, until the log confirms it.
+    func addSending(_ text: String) {
+        sending.append(PendingMessage(text: text))
     }
 
     /// Fetches what's new since you last looked, showing the small refresh spinner.
@@ -135,6 +156,14 @@ final class ChatStore: ObservableObject {
             rebuildToolIndex()
         }
         if queue != queued { queued = queue }
+        // A sent message is confirmed once it appears as a message or in Claude's queue.
+        if !sending.isEmpty {
+            let arrived = fresh.compactMap { item -> String? in
+                if case .user(let t) = item.kind { return t } else { return nil }
+            } + queue
+            let remaining = sending.filter { p in !arrived.contains { sameMessage($0, p.text) } }
+            if remaining != sending { sending = remaining }
+        }
         loaded = true
         if offset != startOffset { save() }
     }
