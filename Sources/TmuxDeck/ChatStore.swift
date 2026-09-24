@@ -87,7 +87,7 @@ final class ChatStore: ObservableObject {
 
     private var cacheURL: URL {
         let dir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("TmuxDeck/chats-v4", isDirectory: true)
+            .appendingPathComponent("TmuxDeck/chats-v5", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir.appendingPathComponent("\(sessionID).json")
     }
@@ -238,6 +238,11 @@ def result_text(c):
     return ""
 
 HIDDEN = ("<command-", "<local-command", "<system-reminder", "Caveat:", "<bash-", "<user-memory", "<task-notification")
+import re
+PASTE_TAG = re.compile(r"</?pasted_content[^>]*>")
+def clean(text):
+    # Claude Code wraps pasted text in <pasted_content id="…"> tags; show just the text.
+    return PASTE_TAG.sub("", text).strip()
 for raw in data[:end].splitlines():
     try: d = json.loads(raw)
     except Exception: continue
@@ -248,17 +253,21 @@ for raw in data[:end].splitlines():
     content = msg.get("content")
     if t == "attachment":
         a = d.get("attachment") or {}
-        if a.get("type") == "queued_command" and isinstance(a.get("prompt"), str) and a["prompt"].strip():
-            emit(k="user", id=uid, t=cut(a["prompt"].strip(), 20000))
+        p = a.get("prompt")
+        if a.get("type") == "queued_command" and isinstance(p, str) and p.strip() and not p.strip().startswith(HIDDEN):
+            emit(k="user", id=uid, t=cut(clean(p), 20000))
         continue
     if t == "queue-operation":
         op = d.get("operation")
-        if op == "enqueue" and isinstance(d.get("content"), str):
-            emit(k="q+", t=d["content"])
+        c = d.get("content")
+        if isinstance(c, str) and c.strip().startswith(HIDDEN):
+            continue   # Claude's own background notices, not your messages
+        if op == "enqueue" and isinstance(c, str):
+            emit(k="q+", t=clean(c))
         elif op == "dequeue":
             emit(k="q-")
         elif op == "remove":
-            emit(k="qx", t=d.get("content") if isinstance(d.get("content"), str) else "")
+            emit(k="qx", t=clean(c) if isinstance(c, str) else "")
         continue
     if t == "user":
         if isinstance(content, str):
@@ -276,8 +285,10 @@ for raw in data[:end].splitlines():
                     continue
                 elif text.startswith("[Request interrupted"):
                     emit(k="note", id=f"{uid}-{i}", t="You stopped Claude")
+                elif text.startswith("This session is being continued from a previous conversation"):
+                    emit(k="note", id=f"{uid}-{i}", t="Earlier conversation was compacted to free up context")
                 else:
-                    texts.append(text)
+                    texts.append(clean(text))
             elif part.get("type") == "image":
                 images += 1
         if texts or images:

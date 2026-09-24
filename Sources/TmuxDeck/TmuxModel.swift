@@ -770,15 +770,30 @@ final class TmuxModel: ObservableObject, Identifiable {
             }
             return
         }
-        // Paste, press Enter, then check the text didn't stay in the input line
-        // (an Enter that lands mid-redraw can be dropped) and press it once more if so.
-        let script = """
-        \(imagePaste)f=$(mktemp) && cat > "$f" && tmux load-buffer -b deck-compose "$f" && tmux paste-buffer -p -d -b deck-compose -t \(t) \
-          && sleep 0.3 && tmux send-keys -t \(t) Enter && sleep 0.7 \
-          && first=$(head -n1 "$f" | cut -c1-40) \
-          && if [ -n "$first" ] && tmux capture-pane -p -t \(t) | tail -8 | grep -F -q -- "❯ $first"; then tmux send-keys -t \(t) Enter; fi
-        rm -f "$f"
-        """
+        let script: String
+        if w.state.isClaude {
+            // Claude Code can swallow an Enter that arrives while it's still taking in a
+            // paste, and for /commands the first Enter only picks the autocomplete entry.
+            // So: wait until the text shows in Claude's input line, press Enter, and keep
+            // pressing (up to 3 times) until the input line no longer holds it.
+            // Claude's prompt is "❯" plus a no-break space, normalised here with sed.
+            script = """
+            \(imagePaste)f=$(mktemp) && cat > "$f" && tmux load-buffer -b deck-compose "$f" && tmux paste-buffer -p -d -b deck-compose -t \(t) || exit 1
+            first=$(head -n1 "$f" | sed 's/^[[:space:]]*//' | cut -c1-20)
+            inbox() { tmux capture-pane -p -t \(t) | sed 's/\\xc2\\xa0/ /g' | grep '^❯' | tail -1 | cut -c4-; }
+            waiting() { l=$(inbox); case "$l" in *"$first"*|*"[Pasted text"*) return 0;; *) return 1;; esac; }
+            for i in 1 2 3 4 5 6 7 8 9 10; do waiting && break; sleep 0.2; done
+            sleep 0.25
+            for i in 1 2 3; do tmux send-keys -t \(t) Enter; sleep 0.9; waiting || break; done
+            rm -f "$f"
+            """
+        } else {
+            script = """
+            \(imagePaste)f=$(mktemp) && cat > "$f" && tmux load-buffer -b deck-compose "$f" && tmux paste-buffer -p -d -b deck-compose -t \(t) \
+              && sleep 0.2 && tmux send-keys -t \(t) Enter
+            rm -f "$f"
+            """
+        }
         Task {
             let result = await remote.run(script, input: text)
             if !result.ok { flash("Couldn't send that. Check the connection.") }
