@@ -30,7 +30,7 @@ struct ContentView: View {
     var body: some View {
         main
             .inspector(isPresented: $showPRs) {
-                PRPanel().inspectorColumnWidth(min: 280, ideal: 340, max: 520)
+                PRPanelHost().inspectorColumnWidth(min: 280, ideal: 340, max: 520)
             }
             .sheet(isPresented: $addingServer) { AddServerView(sheet: true) }
     }

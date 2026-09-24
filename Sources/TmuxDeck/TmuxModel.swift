@@ -501,6 +501,23 @@ final class TmuxModel: ObservableObject, Identifiable {
         return w.title
     }
 
+    private var repoByPath: [String: String?] = [:]
+
+    /// The GitHub "owner/name" of the git repository at `path` on this server, if any.
+    func repository(for path: String) async -> String? {
+        if let cached = repoByPath[path] { return cached }
+        let result = await remote.run("git -C \(sq(path)) remote get-url origin 2>/dev/null")
+        let url = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        // git@github.com:owner/repo.git, git@alias.github.com:owner/repo, https://github.com/owner/repo.git
+        var repo: String?
+        if url.contains("github"), let m = url.firstMatch(of: try! Regex(#"[:/]([\w.-]+)/([\w.-]+?)(?:\.git)?/?$"#)),
+           let o = m[1].substring, let r = m[2].substring {
+            repo = "\(o)/\(r)"
+        }
+        repoByPath[path] = repo
+        return repo
+    }
+
     /// Stops polling and closes this server's terminals, e.g. when the server is removed.
     func stop() {
         pollTask?.cancel()

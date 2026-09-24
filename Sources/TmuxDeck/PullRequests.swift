@@ -50,6 +50,34 @@ final class PRStore: ObservableObject {
 
     static func id(owner: String, repo: String, number: Int) -> String { "\(owner)/\(repo)#\(number)" }
 
+    private static let barePattern = try! Regex(#"(?:\bPR\s*#?|#)(\d{2,6})\b"#)
+
+    /// PR ids mentioned in `texts` (newest first): full links, plus "#2258" / "PR 2260"
+    /// when the window's repository is known.
+    static func mentions(in texts: [String], repo: String?) -> [String] {
+        var ids: [String] = []
+        func add(_ id: String) { if !ids.contains(id) { ids.append(id) } }
+        for text in texts {
+            for m in text.matches(of: urlPattern) {
+                if let o = m[1].substring, let r = m[2].substring, let n = m[3].substring { add("\(o)/\(r)#\(n)") }
+            }
+            if let repo {
+                for m in text.matches(of: barePattern) {
+                    if let n = m[1].substring { add("\(repo)#\(n)") }
+                }
+            }
+        }
+        return ids
+    }
+
+    /// Fetches a PR given an id like "owner/repo#123".
+    func fetch(id: String, maxAge: TimeInterval = 120) {
+        let parts = id.split(separator: "#")
+        let path = parts.first?.split(separator: "/") ?? []
+        guard parts.count == 2, path.count == 2, let n = Int(parts[1]) else { return }
+        fetch(owner: String(path[0]), repo: String(path[1]), number: n, maxAge: maxAge)
+    }
+
     // MARK: Fetching
 
     func refreshList() async {
@@ -337,8 +365,55 @@ struct PRChip: View {
 
 // MARK: Side panel
 
+/// Picks the panel's inputs from the window on screen: its repository and the PRs its chat mentions.
+struct PRPanelHost: View {
+    @EnvironmentObject private var model: TmuxModel
+    @State private var repo: String?
+    @State private var repoPath: String?
+
+    var body: some View {
+        let w = model.selectedWindow
+        Group {
+            if let w, let sid = w.claude?.sessionID {
+                PRPanelForChat(store: model.chatStore(for: sid), title: model.displayTitle(w), repo: repo)
+            } else {
+                PRPanel(repo: repo, mentions: PRStore.mentions(in: w.map { [model.displayTitle($0)] } ?? [], repo: repo))
+            }
+        }
+        .task(id: "\(model.host):\(w?.path ?? "")") {
+            guard let path = w?.path, !path.isEmpty else { repo = nil; return }
+            repo = await model.repository(for: path)
+        }
+    }
+}
+
+private struct PRPanelForChat: View {
+    @ObservedObject var store: ChatStore
+    let title: String
+    let repo: String?
+
+    var body: some View {
+        PRPanel(repo: repo, mentions: PRStore.mentions(in: texts, repo: repo))
+    }
+
+    /// What you and Claude wrote, newest first (tool output is left out: it's noisy).
+    private var texts: [String] {
+        var out: [String] = []
+        for item in store.items.suffix(400).reversed() {
+            switch item.kind {
+            case .user(let t), .assistant(let t): out.append(t)
+            default: break
+            }
+        }
+        return out + [title]
+    }
+}
+
 struct PRPanel: View {
+    let repo: String?
+    let mentions: [String]
     @ObservedObject private var store = PRStore.shared
+    @AppStorage("prs.allRepos") private var allRepos = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -354,12 +429,30 @@ struct PRPanel: View {
                 .buttonStyle(.borderless)
                 .help("Refresh")
             }
-            .padding(12)
-            Divider()
+            .padding(.horizontal, 12)
+            .padding(.top, 12)
+            if let repo {
+                Picker("", selection: $allRepos) {
+                    Text(repo.split(separator: "/").last.map(String.init) ?? repo).tag(false)
+                    Text("All repos").tag(true)
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .padding(.horizontal, 12)
+                .padding(.top, 8)
+                .help("Show PRs for this window's repository (\(repo)) or all of yours")
+            }
+            Divider().padding(.top, 10)
             List {
                 if let e = store.error { Text(e).font(.caption).foregroundStyle(.red) }
-                section("Yours", store.mine)
-                if !store.reviewRequested.isEmpty { section("Waiting for your review", store.reviewRequested) }
+                if !mentioned.isEmpty {
+                    Section("In this chat") {
+                        ForEach(mentioned) { PRRow(pr: $0, highlighted: true) }
+                    }
+                }
+                section("Yours", filter(store.mine))
+                let review = filter(store.reviewRequested)
+                if !review.isEmpty { section("Waiting for your review", review) }
             }
             .listStyle(.sidebar)
             .overlay {
@@ -372,12 +465,29 @@ struct PRPanel: View {
                 try? await Task.sleep(for: .seconds(60))
             }
         }
+        .onAppear(perform: fetchMentions)
+        .onChange(of: mentions) { _, _ in fetchMentions() }
+    }
+
+    /// Mentioned PRs we know about, newest mention first. Bare numbers that turn out
+    /// not to be PRs (issues, other things) simply never show up.
+    private var mentioned: [PRInfo] { mentions.prefix(12).compactMap { store.byID[$0] } }
+
+    private func filter(_ prs: [PRInfo]) -> [PRInfo] {
+        let hidden = Set(mentioned.map(\.id))
+        return prs.filter { pr in
+            !hidden.contains(pr.id) && (allRepos || repo == nil || pr.repo.caseInsensitiveCompare(repo!) == .orderedSame)
+        }
+    }
+
+    private func fetchMentions() {
+        for id in mentions.prefix(12) where store.byID[id] == nil { store.fetch(id: id) }
     }
 
     @ViewBuilder private func section(_ title: String, _ prs: [PRInfo]) -> some View {
         Section(title) {
             if prs.isEmpty && store.listUpdated != nil {
-                Text("None open").foregroundStyle(.secondary)
+                Text(allRepos || repo == nil ? "None open" : "None open in this repo").foregroundStyle(.secondary)
             }
             ForEach(prs) { pr in
                 PRRow(pr: pr)
@@ -388,7 +498,7 @@ struct PRPanel: View {
 
 private struct PRRow: View {
     let pr: PRInfo
-    @State private var hovering = false
+    var highlighted = false
 
     var body: some View {
         Button { if let u = URL(string: pr.url) { NSWorkspace.shared.open(u) } } label: {
@@ -407,6 +517,13 @@ private struct PRRow: View {
                 .font(.caption)
             }
             .padding(.vertical, 4)
+            .padding(.horizontal, highlighted ? 8 : 0)
+            .background {
+                if highlighted {
+                    RoundedRectangle(cornerRadius: 8).fill(Color.accentColor.opacity(0.12))
+                    RoundedRectangle(cornerRadius: 8).strokeBorder(Color.accentColor.opacity(0.35))
+                }
+            }
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)

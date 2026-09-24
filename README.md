@@ -18,7 +18,7 @@ tmux stays the backend. Your sessions keep running on the server when the app cl
 - **A raw terminal view** (⌥⌘T) for anything interactive, like vim or htop.
 - **Several servers at once.** Add servers from the + button (it lists the hosts in your `~/.ssh/config`); each gets its own section in the sidebar.
 - **Port forwarding per server.** Turn it on in a server's ••• menu to run that host's `LocalForward` rules from your SSH config in the background. It reconnects on its own and shows which ports are forwarding and which are already taken on your Mac.
-- **Pull requests at a glance.** A side panel (⇧⌘P) lists your open PRs and ones waiting for your review, with approval status and CI results (passed / failed / running). PR links in chats become live chips; hover for approvals and failing checks, click to open. Uses the GitHub CLI (`gh`), which must be installed and signed in on your Mac.
+- **Pull requests at a glance.** A side panel (⇧⌘P) lists your open PRs and ones waiting for your review for the open window's repository (or all repos), highlights the PRs mentioned in the open chat, with approval status and CI results (passed / failed / running). PR links in chats become live chips; hover for approvals and failing checks, click to open. Uses the GitHub CLI (`gh`), which must be installed and signed in on your Mac.
 
 ## Requirements
 
