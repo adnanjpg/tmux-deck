@@ -11,6 +11,20 @@ struct ContentView: View {
     @State private var movingToNewSession: TmuxWindow?
     @State private var addingServer = false
     @AppStorage("showPRs") private var showPRs = false
+    /// Collapsed sidebar groups: "host" for a server, "host#session" for a session.
+    @AppStorage("collapsedGroups") private var collapsedStore = ""
+
+    private var collapsed: Set<String> { Set(collapsedStore.split(separator: "\n").map(String.init)) }
+
+    private func isExpanded(_ key: String) -> Binding<Bool> {
+        Binding(get: { !collapsed.contains(key) }, set: { setExpanded(key, $0) })
+    }
+
+    private func setExpanded(_ key: String, _ expanded: Bool) {
+        var c = collapsed
+        if expanded { c.remove(key) } else { c.insert(key) }
+        collapsedStore = c.sorted().joined(separator: "\n")
+    }
     /// The server a menu action applies to (it may not be the one on screen).
     @State private var target: TmuxModel?
     @EnvironmentObject private var app: AppModel
@@ -102,13 +116,16 @@ struct ContentView: View {
     private var sidebar: some View {
         List(selection: Binding(get: { app.selectionTag }, set: { app.select(tag: $0) })) {
             ForEach(app.servers) { server in
-                Section {
+                Section(isExpanded: isExpanded(server.host)) {
                     serverRows(server)
                 } header: {
                     ServerHeader(server: server, forwarder: app.forwarders[server.host] ?? PortForwarder(host: server.host),
                                  showName: app.servers.count > 1 || !server.connected,
                                  onNewSession: { target = server; renameText = ""; newSessionPrompt = true },
-                                 onRemove: { app.removeServer(server.host) })
+                                 onRemove: { app.removeServer(server.host) },
+                                 onCollapseSessions: { collapse in
+                                     for sess in server.sessions { setExpanded("\(server.host)#\(sess.name)", !collapse) }
+                                 })
                 }
             }
         }
@@ -133,8 +150,25 @@ struct ContentView: View {
             }
         }
         ForEach(server.sessions) { session in
-            HStack {
-                Text(session.name).font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+            let key = "\(server.host)#\(session.name)"
+            let open = !collapsed.contains(key)
+            HStack(spacing: 5) {
+                Button {
+                    withAnimation(.snappy) { setExpanded(key, !open) }
+                } label: {
+                    HStack(spacing: 5) {
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 9, weight: .bold))
+                            .rotationEffect(.degrees(open ? 90 : 0))
+                            .frame(width: 10)
+                        Text(session.name).font(.caption.weight(.semibold))
+                        if !open { collapsedSummary(session) }
+                    }
+                    .foregroundStyle(.secondary)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help(open ? "Collapse" : "Expand")
                 Spacer()
                 Menu {
                     sessionMenu(session.name, server)
@@ -151,7 +185,7 @@ struct ContentView: View {
             .dropDestination(for: String.self) { ids, _ in
                 server.handleDrop(ids, onto: nil, session: session.name)
             }
-            ForEach(session.windows) { window in
+            ForEach(open ? session.windows : []) { window in
                 WindowRow(window: window, title: server.displayTitle(window))
                     .tag(tag(window.id))
                     .contextMenu { windowMenu(window, server) }
@@ -167,6 +201,19 @@ struct ContentView: View {
                         .draggable(pane.id)
                 }
             }
+        }
+    }
+
+    /// What a collapsed session still tells you: how many windows, and whether any need you.
+    @ViewBuilder private func collapsedSummary(_ session: TmuxSession) -> some View {
+        let states = session.windows.flatMap { [$0] + $0.paneItems }.map(\.state)
+        Text("\(session.windows.count)").font(.caption2.monospacedDigit())
+            .padding(.horizontal, 5).padding(.vertical, 1)
+            .background(Capsule().fill(Color.secondary.opacity(0.15)))
+        if states.contains(.claudeNeedsYou) {
+            Circle().fill(.orange).frame(width: 6, height: 6).help("A Claude window needs your answer")
+        } else if states.contains(.claudeWorking) {
+            Circle().fill(.blue).frame(width: 6, height: 6).help("Claude is working in this session")
         }
     }
 
@@ -488,6 +535,7 @@ struct ServerHeader: View {
     let showName: Bool
     var onNewSession: () -> Void
     var onRemove: () -> Void
+    var onCollapseSessions: (Bool) -> Void = { _ in }
     @State private var showingPorts = false
     @State private var confirmRemove = false
 
@@ -509,6 +557,8 @@ struct ServerHeader: View {
             Spacer()
             Menu {
                 Button("New session…", action: onNewSession)
+                Button("Collapse all sessions") { withAnimation(.snappy) { onCollapseSessions(true) } }
+                Button("Expand all sessions") { withAnimation(.snappy) { onCollapseSessions(false) } }
                 do {
                     let f = forwarder
                     Divider()
