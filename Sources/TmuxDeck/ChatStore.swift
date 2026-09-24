@@ -7,6 +7,7 @@ struct ChatItem: Identifiable, Equatable, Codable {
         case assistant(String)
         case tool(name: String, summary: String, added: Int, removed: Int)
         case note(String)
+        case thinking(String)
     }
     var id: String
     var kind: Kind
@@ -49,7 +50,7 @@ final class ChatStore: ObservableObject {
 
     private var cacheURL: URL {
         let dir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("TmuxDeck/chats", isDirectory: true)
+            .appendingPathComponent("TmuxDeck/chats-v2", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir.appendingPathComponent("\(sessionID).json")
     }
@@ -100,6 +101,7 @@ final class ChatStore: ObservableObject {
             case "user": fresh.append(ChatItem(id: id, kind: .user(text)))
             case "text": fresh.append(ChatItem(id: id, kind: .assistant(text)))
             case "note": fresh.append(ChatItem(id: id, kind: .note(text)))
+            case "thinking": fresh.append(ChatItem(id: id, kind: .thinking(text)))
             case "tool":
                 fresh.append(ChatItem(id: id, kind: .tool(name: obj["name"] as? String ?? "Tool",
                                                           summary: obj["s"] as? String ?? "",
@@ -201,6 +203,8 @@ for raw in data[:end].splitlines():
             if not isinstance(part, dict): continue
             if part.get("type") == "text" and part.get("text", "").strip():
                 emit(k="text", id=f"{uid}-{i}", t=part["text"])
+            elif part.get("type") == "thinking" and (part.get("thinking") or "").strip():
+                emit(k="thinking", id=f"{uid}-{i}", t=cut(part["thinking"], 6000))
             elif part.get("type") == "tool_use":
                 inp = part.get("input") or {}
                 add = rem = 0

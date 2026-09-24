@@ -14,7 +14,9 @@ struct ChatView: View {
                     ForEach(store.items) { item in
                         ChatRow(item: item)
                     }
-                    if window.state == .claudeWorking {
+                    if let activity = model.activities[window.id] {
+                        ActivityView(activity: activity, working: window.state == .claudeWorking)
+                    } else if window.state == .claudeWorking {
                         HStack(spacing: 8) {
                             ProgressView().controlSize(.small)
                             Text("Claude is working…").foregroundStyle(.secondary)
@@ -86,11 +88,75 @@ struct ChatRow: View {
         case .tool(let name, let summary, let added, let removed):
             ToolRow(name: name, summary: summary, added: added, removed: removed,
                     result: item.result, isError: item.isError)
+        case .thinking(let text):
+            ThinkingRow(text: text)
         case .note(let text):
             Text(text)
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity)
+        }
+    }
+}
+
+/// Claude's live status line, like the one under its output in the terminal.
+struct ActivityView: View {
+    let activity: ClaudeActivity
+    let working: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                Text(activity.glyph == "·" || activity.glyph == "*" ? "✻" : activity.glyph)
+                    .foregroundStyle(working ? Color.orange : Color.secondary)
+                    .symbolEffect(.pulse, isActive: working)
+                    .phaseAnimator(working ? [0.35, 1.0] : [1.0]) { v, o in v.opacity(o) } animation: { _ in .easeInOut(duration: 0.8) }
+                Text(activity.headline)
+                    .foregroundStyle(working ? .primary : .secondary)
+                    .textSelection(.enabled)
+            }
+            .font(working ? .body : .callout)
+            if working, !activity.details.isEmpty {
+                VStack(alignment: .leading, spacing: 3) {
+                    ForEach(Array(activity.details.enumerated()), id: \.offset) { _, line in
+                        Text(line)
+                            .font(.callout)
+                            .foregroundStyle(line.hasPrefix("☒") || line.hasPrefix("✔") ? .secondary : .primary)
+                            .strikethrough(line.hasPrefix("☒"))
+                            .lineLimit(2)
+                    }
+                }
+                .padding(.leading, 22)
+            }
+        }
+        .padding(.top, 4)
+        .animation(.easeOut(duration: 0.2), value: activity)
+    }
+}
+
+struct ThinkingRow: View {
+    let text: String
+    @State private var open = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Button { open.toggle() } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "brain").foregroundStyle(.tertiary)
+                    Text("Thinking").foregroundStyle(.secondary)
+                    Image(systemName: open ? "chevron.down" : "chevron.right").font(.caption).foregroundStyle(.tertiary)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            if open {
+                Text(text)
+                    .font(.callout)
+                    .italic()
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+                    .padding(.leading, 22)
+            }
         }
     }
 }

@@ -80,7 +80,16 @@ struct TmuxWindow: Identifiable, Hashable {
 struct ClaudeSessionInfo: Hashable {
     var sessionID: String
     var name: String?
-    var status: String?
+    var status: String?        // "busy" while working, "idle", "shell" (idle with a background shell)…
+    var waitingFor: String?    // set when Claude is waiting on you
+}
+
+/// Claude's live status line from its screen, e.g. "Thinking… (1m 3s · ↓ 2.3k tokens)",
+/// plus whatever it lists under it (to-dos, running tools).
+struct ClaudeActivity: Equatable {
+    var glyph: String
+    var headline: String
+    var details: [String]
 }
 
 struct PromptOption: Hashable {
@@ -110,6 +119,8 @@ final class TmuxModel: ObservableObject {
     @Published var promptOptions: [String: [PromptOption]] = [:]
     /// Claude's own suggestion for the next message (the dim text in its input line).
     @Published var suggestions: [String: String] = [:]
+    /// Claude's live status line per item.
+    @Published var activities: [String: ClaudeActivity] = [:]
     /// Conversation titles Claude generated, by session id.
     @Published var titles: [String: String] = [:]
     /// Windows the person switched to the raw terminal view.
@@ -196,7 +207,8 @@ final class TmuxModel: ObservableObject {
                 let updated = obj["updatedAt"] as? Double ?? 0
                 if let existing = claudeByPane[paneID], existing.updated > updated { continue }
                 claudeByPane[paneID] = (ClaudeSessionInfo(sessionID: sid, name: obj["name"] as? String,
-                                                              status: obj["status"] as? String), updated)
+                                                              status: obj["status"] as? String,
+                                                              waitingFor: obj["waitingFor"] as? String), updated)
                 currentCapture = nil
                 continue
             }
@@ -227,7 +239,7 @@ final class TmuxModel: ObservableObject {
             let state: WindowState
             if command.contains("claude") {
                 let plain = raw.map(stripANSI).filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
-                state = Self.claudeState(Array(plain.suffix(12)), status: claudeInfo?.status)
+                state = Self.claudeState(Array(plain.suffix(12)), info: claudeInfo)
             } else if ["bash", "zsh", "sh", "fish"].contains(command) {
                 state = .shell
             } else {
@@ -262,9 +274,11 @@ final class TmuxModel: ObservableObject {
 
         var options: [String: [PromptOption]] = [:]
         var newSuggestions: [String: String] = [:]
+        var newActivities: [String: ClaudeActivity] = [:]
         let allItems = bySession.values.joined().flatMap { [$0] + $0.paneItems }
         for w in allItems where w.state.isClaude {
             let raw = captures[w.paneID] ?? []
+            if let activity = Self.activity(raw) { newActivities[w.id] = activity }
             if w.state == .claudeNeedsYou {
                 options[w.id] = Self.promptOptions(raw.suffix(15).map(stripANSI))
             } else if let suggestion = Self.suggestion(raw) {
@@ -273,6 +287,7 @@ final class TmuxModel: ObservableObject {
         }
         if options != promptOptions { promptOptions = options }
         if newSuggestions != suggestions { suggestions = newSuggestions }
+        if newActivities != activities { activities = newActivities }
         let claudeIDs = allItems.compactMap(\.claude?.sessionID)
         fetchMissingTitles(claudeIDs)
         prefetchChats(claudeIDs)
@@ -291,15 +306,44 @@ final class TmuxModel: ObservableObject {
     /// Reads the bottom of a Claude Code screen and guesses what it's doing.
     /// A question on screen wins; otherwise trust the status Claude Code records,
     /// falling back to reading the screen.
-    static func claudeState(_ lines: [String], status: String?) -> WindowState {
+    static func claudeState(_ lines: [String], info: ClaudeSessionInfo?) -> WindowState {
         let text = lines.joined(separator: "\n")
-        if text.contains("Do you want") || text.contains("❯ 1.") || text.contains("(y/n)") {
+        if text.contains("Do you want") || text.contains("❯ 1.") || text.contains("(y/n)")
+            || info?.waitingFor != nil || info?.status == "waiting" || info?.status == "blocked" {
             return .claudeNeedsYou
         }
-        if let status {
-            return status == "idle" ? .claudeReady : .claudeWorking
+        if let status = info?.status {
+            return ["busy", "running", "working", "compacting"].contains(status) ? .claudeWorking : .claudeReady
         }
         return text.contains("esc to interrupt") ? .claudeWorking : .claudeReady
+    }
+
+    private static let spinnerGlyphs: Set<Character> = ["✻", "✽", "✢", "✳", "✶", "✷", "✸", "✹", "✺", "·", "*", "⏺", "●"]
+
+    /// Finds Claude's status line just above its input box, and the lines under it.
+    static func activity(_ rawLines: [String]) -> ClaudeActivity? {
+        let lines = rawLines.map(stripANSI).filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
+        let rules = lines.indices.filter { lines[$0].trimmingCharacters(in: .whitespaces).hasPrefix("───") }
+        guard rules.count >= 2 else { return nil }
+        let top = rules[rules.count - 2]
+        var i = top - 1
+        while i >= 0 && i >= top - 12 {
+            let t = lines[i].trimmingCharacters(in: .whitespaces)
+            if let first = t.first, spinnerGlyphs.contains(first), t.contains("…") || t.contains(" for ") {
+                var headline = String(t.dropFirst()).trimmingCharacters(in: .whitespaces)
+                headline = headline.replacingOccurrences(of: #"\s*·\s*esc to interrupt"#, with: "", options: .regularExpression)
+                    .replacingOccurrences(of: "esc to interrupt", with: "")
+                    .replacingOccurrences(of: "()", with: "")
+                    .trimmingCharacters(in: .whitespaces)
+                let details = lines[(i + 1)..<top]
+                    .map { $0.trimmingCharacters(in: .whitespaces) }
+                    .map { $0.hasPrefix("⎿") ? String($0.dropFirst()).trimmingCharacters(in: .whitespaces) : $0 }
+                    .filter { !$0.isEmpty }
+                return ClaudeActivity(glyph: String(first), headline: headline, details: Array(details.prefix(10)))
+            }
+            i -= 1
+        }
+        return nil
     }
 
     /// Claude shows its suggested next message as dim text after the ❯ prompt.
@@ -367,13 +411,20 @@ final class TmuxModel: ObservableObject {
         return result
     }
 
-    /// If you switch windows from inside tmux (keyboard shortcut, `tmux select-window`),
-    /// move the sidebar selection to match.
+    private var lastViewActive: [String: String] = [:]
+
+    /// If you switch windows from inside the raw terminal (a tmux shortcut or
+    /// `tmux select-window`), move the sidebar selection to match. Only reacts
+    /// when tmux's window actually changed, and only while the raw terminal is
+    /// on screen, so the chat view never gets pulled to another window.
     private func followTmuxSelection(_ viewActive: [String: String]) {
+        defer { lastViewActive = viewActive }
         guard Date().timeIntervalSince(lastUserSelection) > 3, let current = selectedWindow,
-              let controller = terminals[current.session],
+              rawTerminal.contains(current.id) || current.state.isRunningProgram,
+              let controller = terminals[current.session], controller.alive,
               let active = viewActive[controller.viewSession],
-              active != current.windowID else { return }
+              let previous = lastViewActive[controller.viewSession],
+              active != previous, active != current.windowID else { return }
         selection = "\(current.session)|\(active)"
     }
 
@@ -407,6 +458,13 @@ final class TmuxModel: ObservableObject {
 
     /// Claude's conversation title if it has one, then a name you gave the window, then the folder.
     func displayTitle(_ w: TmuxWindow) -> String {
+        let base = baseTitle(w)
+        guard !w.isPane, let siblings = sessions.first(where: { $0.name == w.session })?.windows,
+              siblings.filter({ !$0.isPane && baseTitle($0) == base }).count > 1 else { return base }
+        return "\(base) (\(w.index))"
+    }
+
+    private func baseTitle(_ w: TmuxWindow) -> String {
         if let id = w.claude?.sessionID, let title = titles[id], w.isPane || w.name == w.command { return title }
         if w.isPane { return w.state.isClaude ? "Claude · \(w.folder)" : "\(w.command) · \(w.folder)" }
         return w.title
@@ -643,8 +701,14 @@ final class TmuxModel: ObservableObject {
     /// multi-line messages arrive as one message instead of one per line.
     func send(text: String, to w: TmuxWindow) {
         let t = sq(target(w))
+        // Paste, press Enter, then check the text didn't stay in the input line
+        // (an Enter that lands mid-redraw can be dropped) and press it once more if so.
         let script = """
-        tmux load-buffer -b deck-compose - && tmux paste-buffer -p -d -b deck-compose -t \(t) && sleep 0.15 && tmux send-keys -t \(t) Enter
+        f=$(mktemp) && cat > "$f" && tmux load-buffer -b deck-compose "$f" && tmux paste-buffer -p -d -b deck-compose -t \(t) \
+          && sleep 0.3 && tmux send-keys -t \(t) Enter && sleep 0.7 \
+          && first=$(head -n1 "$f" | cut -c1-40) \
+          && if [ -n "$first" ] && tmux capture-pane -p -t \(t) | tail -8 | grep -F -q -- "❯ $first"; then tmux send-keys -t \(t) Enter; fi
+        rm -f "$f"
         """
         Task {
             let result = await Remote.run(script, input: text)
