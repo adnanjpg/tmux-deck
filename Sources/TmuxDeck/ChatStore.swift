@@ -23,16 +23,22 @@ struct PendingMessage: Identifiable, Equatable {
     let sentAt = Date()
 }
 
-/// Loosely compares a sent message with what Claude logged (whitespace can differ).
-private func sameMessage(_ a: String, _ b: String) -> Bool {
-    func norm(_ s: String) -> String {
-        let words = s.split(whereSeparator: \.isWhitespace)
-            .filter { !$0.contains("/.cache/tmuxdeck/") }
-            .joined(separator: " ")
-            .replacingOccurrences(of: #"\[Image #\d+\]"#, with: "", options: .regularExpression)
-        return String(words.split(separator: " ").joined(separator: " ").prefix(60))
-    }
-    return norm(a) == norm(b)
+/// Normalises a message for matching: collapses whitespace and drops image paths,
+/// "[Image #1]" placeholders and the "!" of shell commands.
+private func normalized(_ s: String) -> String {
+    s.split(whereSeparator: \.isWhitespace)
+        .filter { !$0.contains("/.cache/tmuxdeck/") }
+        .joined(separator: " ")
+        .replacingOccurrences(of: #"\[Image #\d+\]"#, with: "", options: .regularExpression)
+        .trimmingCharacters(in: CharacterSet(charactersIn: "! ").union(.whitespaces))
+}
+
+/// True when `sent` shows up in `logged`. Claude Code can merge several queued
+/// messages into one, so this checks containment rather than equality.
+private func arrived(_ sent: String, in logged: String) -> Bool {
+    let needle = String(normalized(sent).prefix(50))
+    guard !needle.isEmpty else { return false }
+    return normalized(logged).contains(needle)
 }
 
 /// Follows a Claude Code conversation by reading its log on the work machine.
@@ -103,6 +109,8 @@ final class ChatStore: ObservableObject {
 
     /// Shows a message right away, greyed out, until the log confirms it.
     func addSending(_ text: String, images: Int = 0) {
+        // Slash commands (/clear, /compact…) aren't chat messages, so they'd never be confirmed.
+        if images == 0 && text.trimmingCharacters(in: .whitespaces).hasPrefix("/") { return }
         sending.append(PendingMessage(text: text, images: images))
     }
 
@@ -123,6 +131,7 @@ final class ChatStore: ObservableObject {
         var fresh: [ChatItem] = []
         var working = items
         var queue = queued
+        var enqueued: [String] = []
         for line in result.stdout.split(separator: "\n") {
             guard let obj = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any],
                   let k = obj["k"] as? String else { continue }
@@ -135,7 +144,7 @@ final class ChatStore: ObservableObject {
                 missing = true
             case "reset":
                 working = []; toolIndex = [:]; queue = []
-            case "q+": queue.append(text)
+            case "q+": queue.append(text); enqueued.append(text)
             case "q-": if !queue.isEmpty { queue.removeFirst() }
             case "qx":
                 if let i = queue.firstIndex(of: text) { queue.remove(at: i) } else if !queue.isEmpty { queue.removeFirst() }
@@ -167,10 +176,15 @@ final class ChatStore: ObservableObject {
         if queue != queued { queued = queue }
         // A sent message is confirmed once it appears as a message or in Claude's queue.
         if !sending.isEmpty {
-            let arrived = fresh.compactMap { item -> String? in
+            let freshUsers = fresh.filter { if case .user = $0.kind { return true } else { return false } }
+            let logged = freshUsers.compactMap { item -> String? in
                 if case .user(let t) = item.kind { return t } else { return nil }
-            } + queue
-            let remaining = sending.filter { p in !arrived.contains { sameMessage($0, p.text) } }
+            } + enqueued + queue
+            let imagesArrived = freshUsers.contains { ($0.images ?? 0) > 0 }
+            let remaining = sending.filter { p in
+                if normalized(p.text).isEmpty { return !(p.images > 0 && imagesArrived) }
+                return !logged.contains { arrived(p.text, in: $0) }
+            }
             if remaining != sending { sending = remaining }
         }
         loaded = true
