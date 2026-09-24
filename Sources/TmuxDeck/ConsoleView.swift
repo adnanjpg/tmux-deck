@@ -4,6 +4,7 @@ import SwiftUI
 /// A plain terminal window shown as a normal Mac text view: select, copy and
 /// search output like any document, and type commands in the box underneath.
 struct ConsoleView: View {
+    @EnvironmentObject private var model: TmuxModel
     let window: TmuxWindow
     @State private var output = ""
 
@@ -17,7 +18,7 @@ struct ConsoleView: View {
         .task(id: window.id) {
             let target = sq(window.paneID.isEmpty ? window.windowTarget : window.paneID)
             while !Task.isCancelled {
-                let result = await Remote.run("tmux capture-pane -p -J -S -3000 -t \(target)")
+                let result = await model.remote.run("tmux capture-pane -p -J -S -3000 -t \(target)")
                 if result.ok {
                     let text = result.stdout.replacingOccurrences(of: "\\s+$", with: "", options: .regularExpression)
                     if text != output { output = text }

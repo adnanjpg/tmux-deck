@@ -188,7 +188,7 @@ struct ComposeBar: View {
                 .replacingOccurrences(of: ":", with: "")
             let name = "screenshot-\(stamp)-\(attachment.id.uuidString.prefix(4)).png"
             Task {
-                let path = await Remote.upload(png, fileName: name)
+                let path = await model.remote.upload(png, fileName: name)
                 if let i = attachments.firstIndex(where: { $0.id == attachment.id }) {
                     attachments[i].remotePath = path
                     attachments[i].failed = path == nil

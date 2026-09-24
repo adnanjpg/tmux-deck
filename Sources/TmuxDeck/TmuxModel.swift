@@ -108,8 +108,20 @@ struct TmuxSession: Identifiable, Hashable {
 /// and options. That way the app never moves your other tmux clients around.
 let viewSessionPrefix = "deck-"
 
+/// Everything the app knows about one server: its tmux sessions, Claude
+/// conversations and terminals. `AppModel` holds one of these per server.
 @MainActor
-final class TmuxModel: ObservableObject {
+final class TmuxModel: ObservableObject, Identifiable {
+    let remote: Remote
+    var host: String { remote.host }
+    nonisolated var id: String { remote.host }
+    /// Called after each refresh so the app can update the Dock badge across servers.
+    var onRefresh: (() -> Void)?
+
+    init(host: String) {
+        self.remote = Remote(host: host)
+    }
+
     @Published var sessions: [TmuxSession] = []
     @Published var selection: TmuxWindow.ID?
     @Published var connected = false
@@ -130,6 +142,7 @@ final class TmuxModel: ObservableObject {
     /// Unsent text in each window's message box.
     var drafts: [String: String] = [:]
 
+    private(set) var needsYouCount = 0
     private var terminals: [String: TerminalController] = [:]
     private var chatStores: [String: ChatStore] = [:]
     private var prefetched = Set<String>()
@@ -147,10 +160,7 @@ final class TmuxModel: ObservableObject {
     }
 
     func start() {
-        Sounds.registerDefaults()
-        MacKeys.install()
-        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { _, _ in }
-        pollTask?.cancel()
+        guard pollTask == nil else { return }
         pollTask = Task { [weak self] in
             while !Task.isCancelled {
                 await self?.refresh()
@@ -183,8 +193,7 @@ final class TmuxModel: ObservableObject {
     }()
 
     func refresh() async {
-        guard !Remote.host.isEmpty else { return }
-        let result = await Remote.run(Self.pollScript)
+        let result = await remote.run(Self.pollScript)
         guard result.ok else {
             connected = false
             lastError = result.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -398,7 +407,7 @@ final class TmuxModel: ObservableObject {
             "f=$(ls ~/.claude/projects/*/\(id).jsonl 2>/dev/null | head -1); [ -n \"$f\" ] && printf '%s\\t' \(id) && grep -a '\"type\":\"ai-title\"' \"$f\" | tail -1"
         }.joined(separator: "; ")
         Task {
-            let result = await Remote.run(script)
+            let result = await remote.run(script)
             for line in result.stdout.split(separator: "\n") {
                 let parts = line.split(separator: "\t", maxSplits: 1)
                 guard parts.count == 2,
@@ -444,8 +453,8 @@ final class TmuxModel: ObservableObject {
 
     private func notifyStateChanges() {
         let windows = sessions.flatMap(\.windows)
-        let needsYou = windows.filter { $0.state == .claudeNeedsYou }.count
-        NSApp.dockTile.badgeLabel = needsYou > 0 ? "\(needsYou)" : nil
+        needsYouCount = windows.filter { $0.state == .claudeNeedsYou }.count
+        onRefresh?()
 
         let appActive = NSApp.isActive
         var finished = false, asking = false
@@ -471,6 +480,7 @@ final class TmuxModel: ObservableObject {
     private func notify(_ title: String, _ body: String) {
         let content = UNMutableNotificationContent()
         content.title = title
+        content.subtitle = host
         content.body = body
         content.sound = nil   // Sounds.play handles sound, so it isn't doubled
         UNUserNotificationCenter.current().add(
@@ -491,10 +501,18 @@ final class TmuxModel: ObservableObject {
         return w.title
     }
 
+    /// Stops polling and closes this server's terminals, e.g. when the server is removed.
+    func stop() {
+        pollTask?.cancel()
+        pollTask = nil
+        for t in terminals.values { t.stop() }
+        terminals = [:]
+    }
+
     /// One store per conversation, kept for the life of the app so switching is instant.
     func chatStore(for sessionID: String) -> ChatStore {
         if let store = chatStores[sessionID] { return store }
-        let store = ChatStore(sessionID: sessionID)
+        let store = ChatStore(sessionID: sessionID, remote: remote)
         chatStores[sessionID] = store
         return store
     }
@@ -606,7 +624,7 @@ final class TmuxModel: ObservableObject {
 
     func controller(for session: String) -> TerminalController {
         if let existing = terminals[session] { return existing }
-        let controller = TerminalController(session: session)
+        let controller = TerminalController(session: session, remote: remote)
         terminals[session] = controller
         return controller
     }
@@ -619,7 +637,7 @@ final class TmuxModel: ObservableObject {
     // MARK: Actions
 
     private func tmux(_ script: String) async -> Remote.Result {
-        let result = await Remote.run(script)
+        let result = await remote.run(script)
         if !result.ok {
             let message = result.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
             flash(message.isEmpty ? "That didn't work." : message)
@@ -708,7 +726,7 @@ final class TmuxModel: ObservableObject {
     func copyOutput() {
         guard let w = selectedWindow else { return }
         Task {
-            let result = await Remote.run("tmux capture-pane -p -J -S -5000 -t \(sq(target(w)))")
+            let result = await remote.run("tmux capture-pane -p -J -S -5000 -t \(sq(target(w)))")
             guard result.ok else { flash("Couldn't read that window."); return }
             let text = result.stdout.replacingOccurrences(of: "\\s+$", with: "", options: .regularExpression)
             NSPasteboard.general.clearContents()
@@ -729,7 +747,7 @@ final class TmuxModel: ObservableObject {
         }.joined()
         if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             Task {
-                let result = await Remote.run(imagePaste + "tmux send-keys -t \(t) Enter")
+                let result = await remote.run(imagePaste + "tmux send-keys -t \(t) Enter")
                 if !result.ok { flash("Couldn't send that. Check the connection.") }
                 await refresh()
             }
@@ -745,7 +763,7 @@ final class TmuxModel: ObservableObject {
         rm -f "$f"
         """
         Task {
-            let result = await Remote.run(script, input: text)
+            let result = await remote.run(script, input: text)
             if !result.ok { flash("Couldn't send that. Check the connection.") }
             await refresh()
         }
@@ -755,7 +773,7 @@ final class TmuxModel: ObservableObject {
     func send(keys: [String], to w: TmuxWindow, literal: Bool = false) {
         let script = "tmux send-keys -t \(sq(target(w))) \(literal ? "-l " : "")" + keys.map(sq).joined(separator: " ")
         Task {
-            _ = await Remote.run(script)
+            _ = await remote.run(script)
             try? await Task.sleep(for: .milliseconds(300))
             await refresh()
         }

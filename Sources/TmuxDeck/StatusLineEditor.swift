@@ -4,6 +4,7 @@ import SwiftUI
 /// ~/.claude/settings.json and, when that command runs a script, the script itself.
 struct StatusLineEditor: View {
     let window: TmuxWindow
+    @EnvironmentObject private var model: TmuxModel
     @Environment(\.dismiss) private var dismiss
 
     @State private var loading = true
@@ -26,7 +27,7 @@ struct StatusLineEditor: View {
                 .fixedSize(horizontal: false, vertical: true)
 
             if loading {
-                ProgressView("Reading settings from \(Remote.host)…").frame(maxWidth: .infinity, minHeight: 200)
+                ProgressView("Reading settings from \(model.host)…").frame(maxWidth: .infinity, minHeight: 200)
             } else {
                 VStack(alignment: .leading, spacing: 6) {
                     Text("Command").font(.headline)
@@ -112,10 +113,10 @@ print(json.dumps({"command": cmd, "path": path, "script": text}))
 """#
 
     private func load() async {
-        let result = await Remote.run("python3 -", input: Self.loadScript)
+        let result = await model.remote.run("python3 -", input: Self.loadScript)
         guard result.ok,
               let obj = try? JSONSerialization.jsonObject(with: Data(result.stdout.utf8)) as? [String: Any] else {
-            error = "Couldn't read ~/.claude/settings.json on \(Remote.host)."
+            error = "Couldn't read ~/.claude/settings.json on \(model.host)."
             loading = false
             return
         }
@@ -161,7 +162,7 @@ print(json.dumps({"command": cmd, "path": path, "script": text}))
                 setup = "mkdir -p ~/.cache/tmuxdeck && printf %s \(sq(script)) > \(tmp) && chmod +x \(tmp) && "
                 run = command.replacingOccurrences(of: scriptPath, with: tmp)
             }
-            let result = await Remote.run(setup + "cd \(sq(window.path)) 2>/dev/null; " + run, input: sampleInput, timeout: 20)
+            let result = await model.remote.run(setup + "cd \(sq(window.path)) 2>/dev/null; " + run, input: sampleInput, timeout: 20)
             testOutput = stripANSI(result.stdout).trimmingCharacters(in: .newlines)
             if !result.ok {
                 error = "Exited with status \(result.status). " + stripANSI(result.stderr).trimmingCharacters(in: .whitespacesAndNewlines)
@@ -192,7 +193,7 @@ print(json.dumps({"command": cmd, "path": path, "script": text}))
                 """
                 steps.append("python3 -c \(sq(py)) \(sq(command))")
             }
-            let result = await Remote.run(steps.joined(separator: " && "), timeout: 20)
+            let result = await model.remote.run(steps.joined(separator: " && "), timeout: 20)
             saving = false
             if result.ok {
                 dismiss()

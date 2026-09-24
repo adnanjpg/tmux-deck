@@ -64,8 +64,11 @@ final class ChatStore: ObservableObject {
         var queued: [String]?
     }
 
-    init(sessionID: String) {
+    private let remote: Remote
+
+    init(sessionID: String, remote: Remote) {
         self.sessionID = sessionID
+        self.remote = remote
         if let data = try? Data(contentsOf: cacheURL),
            let snapshot = try? JSONDecoder().decode(Snapshot.self, from: data) {
             items = snapshot.items
@@ -115,7 +118,7 @@ final class ChatStore: ObservableObject {
         busy = true
         defer { busy = false }
         let startOffset = offset
-        let result = await Remote.run("python3 - \(sq(sessionID)) \(offset)", input: Self.reader, timeout: 30)
+        let result = await remote.run("python3 - \(sq(sessionID)) \(offset)", input: Self.reader, timeout: 30)
         guard result.ok else { return }
         var fresh: [ChatItem] = []
         var working = items

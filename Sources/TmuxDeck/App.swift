@@ -4,41 +4,44 @@ import SwiftUI
 @main
 struct TmuxDeckApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
-    @StateObject private var model = TmuxModel()
+    @StateObject private var app = AppModel.shared
+
+    /// Menu commands act on the server you're looking at.
+    private var model: TmuxModel? { app.activeServer }
 
     var body: some Scene {
         Window("Tmux Deck", id: "main") {
-            ContentView()
-                .environmentObject(model)
+            RootView()
+                .environmentObject(app)
                 .frame(minWidth: 820, minHeight: 480)
-                .onAppear { model.start() }
+                .onAppear { app.start() }
         }
         .defaultSize(width: 1400, height: 860)
         .windowToolbarStyle(.unified)
         .commands {
             CommandGroup(replacing: .newItem) {
-                Button("New Claude window") { model.newWindow(claude: true) }
+                Button("New Claude window") { model?.newWindow(claude: true) }
                     .keyboardShortcut("n")
-                Button("New terminal window") { model.newWindow(claude: false) }
+                Button("New terminal window") { model?.newWindow(claude: false) }
                     .keyboardShortcut("t")
             }
             CommandMenu("Tmux") {
-                Button("Split right") { model.split(vertical: false) }
+                Button("Split right") { model?.split(vertical: false) }
                     .keyboardShortcut("d")
-                Button("Split down") { model.split(vertical: true) }
+                Button("Split down") { model?.split(vertical: true) }
                     .keyboardShortcut("d", modifiers: [.command, .shift])
-                Button("Show as terminal") { model.toggleRawTerminal() }
+                Button("Show as terminal") { model?.toggleRawTerminal() }
                     .keyboardShortcut("t", modifiers: [.command, .option])
                 Divider()
-                Button("Copy all output") { model.copyOutput() }
+                Button("Copy all output") { model?.copyOutput() }
                     .keyboardShortcut("c", modifiers: [.command, .shift])
                 Divider()
-                Button("Previous window") { model.selectRelative(-1) }
+                Button("Previous window") { model?.selectRelative(-1) }
                     .keyboardShortcut("[")
-                Button("Next window") { model.selectRelative(1) }
+                Button("Next window") { model?.selectRelative(1) }
                     .keyboardShortcut("]")
                 ForEach(1..<10) { n in
-                    Button("Go to window \(n)") { model.selectNumber(n) }
+                    Button("Go to window \(n)") { model?.selectNumber(n) }
                         .keyboardShortcut(KeyEquivalent(Character("\(n)")))
                 }
             }
@@ -50,17 +53,35 @@ struct TmuxDeckApp: App {
     }
 }
 
+/// Shows the first-launch screen until a server is added, then the main window
+/// for the active server.
+struct RootView: View {
+    @EnvironmentObject private var app: AppModel
+
+    var body: some View {
+        if let server = app.activeServer {
+            ContentView()
+                .environmentObject(server)
+        } else {
+            AddServerView()
+        }
+    }
+}
+
 final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
     }
 
+    func applicationWillTerminate(_ notification: Notification) {
+        MainActor.assumeIsolated { AppModel.shared.stopAll() }
+    }
+
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
 }
 
 struct SettingsView: View {
-    @AppStorage("host") private var host = ""
     @AppStorage("fontSize") private var fontSize = 13.0
     @AppStorage("sound.finish.on") private var finishOn = true
     @AppStorage("sound.finish.name") private var finishSound = "Glass"
@@ -73,9 +94,8 @@ struct SettingsView: View {
                 soundRow("When Claude finishes", on: $finishOn, name: $finishSound)
                 soundRow("When Claude asks you something", on: $questionOn, name: $questionSound)
             }
-            Section("Connection") {
-                TextField("SSH host", text: $host, prompt: Text("my-server"))
-                Text("A host name from ~/.ssh/config, or user@address.")
+            Section("Servers") {
+                Text("Add servers with the + button at the bottom of the sidebar. Each server's ••• menu has port forwarding and Remove.")
                     .font(.caption).foregroundStyle(.secondary)
             }
             Section("Terminal") {

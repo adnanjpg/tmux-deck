@@ -9,6 +9,10 @@ struct ContentView: View {
     @State private var closingSession: String?
     @State private var newSessionPrompt = false
     @State private var movingToNewSession: TmuxWindow?
+    @State private var addingServer = false
+    /// The server a menu action applies to (it may not be the one on screen).
+    @State private var target: TmuxModel?
+    @EnvironmentObject private var app: AppModel
 
     enum RenameTarget: Identifiable {
         case window(TmuxWindow), session(String)
@@ -20,14 +24,11 @@ struct ContentView: View {
         }
     }
 
-    @AppStorage("host") private var host = ""
+    private var acting: TmuxModel { target ?? model }
 
     var body: some View {
-        if host.trimmingCharacters(in: .whitespaces).isEmpty {
-            SetupView()
-        } else {
-            main
-        }
+        main
+            .sheet(isPresented: $addingServer) { AddServerView(sheet: true) }
     }
 
     private var main: some View {
@@ -38,14 +39,14 @@ struct ContentView: View {
             detail
         }
         .navigationTitle(model.selectedWindow.map(model.displayTitle) ?? "Tmux Deck")
-        .navigationSubtitle(model.selectedWindow.map { "\($0.session) · \(Remote.host)" } ?? Remote.host)
+        .navigationSubtitle(model.selectedWindow.map { "\($0.session) · \(model.host)" } ?? model.host)
         .toolbar { toolbar }
         .alert(renameTitle, isPresented: Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } })) {
             TextField("Name", text: $renameText)
             Button("Rename") {
                 switch renaming {
-                case .window(let w): model.rename(w, to: renameText)
-                case .session(let s): model.renameSession(s, to: renameText)
+                case .window(let w): acting.rename(w, to: renameText)
+                case .session(let s): acting.renameSession(s, to: renameText)
                 case nil: break
                 }
             }
@@ -53,17 +54,17 @@ struct ContentView: View {
         }
         .alert("New session", isPresented: $newSessionPrompt) {
             TextField("Name", text: $renameText)
-            Button("Create") { model.newSession(named: renameText) }
+            Button("Create") { acting.newSession(named: renameText) }
             Button("Cancel", role: .cancel) {}
         } message: {
             Text("A tmux session is a group of windows, like a project.")
         }
         .confirmationDialog(
-            closing?.isPane == true ? "Close this pane?" : "Close “\(closing.map(model.displayTitle) ?? "")”?",
+            closing?.isPane == true ? "Close this pane?" : "Close “\(closing.map(acting.displayTitle) ?? "")”?",
             isPresented: Binding(get: { closing != nil }, set: { if !$0 { closing = nil } })
         ) {
             Button(closing?.isPane == true ? "Close pane" : "Close window", role: .destructive) {
-                if let closing { closing.isPane ? model.killPane(closing) : model.close(closing) }
+                if let closing { closing.isPane ? acting.killPane(closing) : acting.close(closing) }
             }
         } message: {
             Text("Anything running in it, including a Claude session, will stop.")
@@ -72,14 +73,14 @@ struct ContentView: View {
             "Close session “\(closingSession ?? "")”?",
             isPresented: Binding(get: { closingSession != nil }, set: { if !$0 { closingSession = nil } })
         ) {
-            Button("Close session", role: .destructive) { if let closingSession { model.killSession(closingSession) } }
+            Button("Close session", role: .destructive) { if let closingSession { acting.killSession(closingSession) } }
         } message: {
             Text("All of its windows and everything running in them will stop.")
         }
         .alert("Move to a new session", isPresented: Binding(get: { movingToNewSession != nil },
                                                            set: { if !$0 { movingToNewSession = nil } })) {
             TextField("Session name", text: $renameText)
-            Button("Move") { if let w = movingToNewSession { model.moveWindowToNewSession(w, name: renameText) } }
+            Button("Move") { if let w = movingToNewSession { acting.moveWindowToNewSession(w, name: renameText) } }
             Button("Cancel", role: .cancel) {}
         }
     }
@@ -95,114 +96,128 @@ struct ContentView: View {
     // MARK: Sidebar
 
     private var sidebar: some View {
-        List(selection: Binding(get: { model.selection }, set: { model.userSelected($0) })) {
-            ForEach(model.sessions) { session in
+        List(selection: Binding(get: { app.selectionTag }, set: { app.select(tag: $0) })) {
+            ForEach(app.servers) { server in
                 Section {
-                    ForEach(session.windows) { window in
-                        WindowRow(window: window, title: model.displayTitle(window))
-                            .tag(window.id)
-                            .contextMenu { windowMenu(window) }
-                            .draggable(window.id)
-                            .dropDestination(for: String.self) { ids, _ in
-                                model.handleDrop(ids, onto: window, session: session.name)
-                            }
-                        ForEach(window.paneItems) { pane in
-                            WindowRow(window: pane, title: model.displayTitle(pane), compact: true)
-                                .padding(.leading, 20)
-                                .tag(pane.id)
-                                .contextMenu { paneMenu(pane) }
-                                .draggable(pane.id)
-                        }
-                    }
+                    serverRows(server)
                 } header: {
-                    HStack {
-                        Text(session.name)
-                        Spacer()
-                        Menu {
-                            sessionMenu(session.name)
-                        } label: {
-                            Image(systemName: "ellipsis")
-                        }
-                        .menuStyle(.borderlessButton)
-                        .menuIndicator(.hidden)
-                        .fixedSize()
-                    }
-                    .contextMenu { sessionMenu(session.name) }
-                    .dropDestination(for: String.self) { ids, _ in
-                        model.handleDrop(ids, onto: nil, session: session.name)
-                    }
+                    ServerHeader(server: server, forwarder: app.forwarders[server.host] ?? PortForwarder(host: server.host),
+                                 showName: app.servers.count > 1 || !server.connected,
+                                 onNewSession: { target = server; renameText = ""; newSessionPrompt = true },
+                                 onRemove: { app.removeServer(server.host) })
                 }
             }
         }
         .listStyle(.sidebar)
         .safeAreaInset(edge: .bottom) { statusBar }
-        .overlay {
-            if model.sessions.isEmpty {
-                if model.connected {
-                    ContentUnavailableView {
-                        Label("No tmux sessions", systemImage: "rectangle.stack")
-                    } actions: {
-                        Button("Create session") { renameText = "main"; newSessionPrompt = true }
+    }
+
+    @ViewBuilder private func serverRows(_ server: TmuxModel) -> some View {
+        let tag = { (id: String) in "\(server.host)#\(id)" }
+        if server.sessions.isEmpty {
+            if server.connected {
+                Button("Create a session") { target = server; renameText = "main"; newSessionPrompt = true }
+                    .buttonStyle(.link)
+                    .selectionDisabled()
+            } else {
+                HStack(spacing: 6) {
+                    ProgressView().controlSize(.small)
+                    Text(server.lastError.map { _ in "Can't connect — retrying" } ?? "Connecting…").foregroundStyle(.secondary)
+                }
+                .help(server.lastError ?? "")
+                .selectionDisabled()
+            }
+        }
+        ForEach(server.sessions) { session in
+            HStack {
+                Text(session.name).font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                Spacer()
+                Menu {
+                    sessionMenu(session.name, server)
+                } label: {
+                    Image(systemName: "ellipsis")
+                }
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .fixedSize()
+            }
+            .padding(.top, 6)
+            .selectionDisabled()
+            .contextMenu { sessionMenu(session.name, server) }
+            .dropDestination(for: String.self) { ids, _ in
+                server.handleDrop(ids, onto: nil, session: session.name)
+            }
+            ForEach(session.windows) { window in
+                WindowRow(window: window, title: server.displayTitle(window))
+                    .tag(tag(window.id))
+                    .contextMenu { windowMenu(window, server) }
+                    .draggable(window.id)
+                    .dropDestination(for: String.self) { ids, _ in
+                        server.handleDrop(ids, onto: window, session: session.name)
                     }
-                } else {
-                    ProgressView("Connecting to \(Remote.host)…")
+                ForEach(window.paneItems) { pane in
+                    WindowRow(window: pane, title: server.displayTitle(pane), compact: true)
+                        .padding(.leading, 20)
+                        .tag(tag(pane.id))
+                        .contextMenu { paneMenu(pane, server) }
+                        .draggable(pane.id)
                 }
             }
         }
     }
 
-    @ViewBuilder private func windowMenu(_ window: TmuxWindow) -> some View {
-        Button("Rename…") { renameText = window.title; renaming = .window(window) }
+    @ViewBuilder private func windowMenu(_ window: TmuxWindow, _ m: TmuxModel) -> some View {
+        Button("Rename…") { target = m; renameText = window.title; renaming = .window(window) }
         Divider()
-        Button("Split right") { model.userSelected(window.id); model.split(vertical: false) }
-        Button("Split down") { model.userSelected(window.id); model.split(vertical: true) }
+        Button("Split right") { m.userSelected(window.id); m.split(vertical: false) }
+        Button("Split down") { m.userSelected(window.id); m.split(vertical: true) }
         if window.panes > 1 {
-            Button("Even out panes") { model.evenLayout(window) }
+            Button("Even out panes") { m.evenLayout(window) }
         }
         Divider()
-        Button("Move up") { model.moveWindow(window, by: -1) }
-        Button("Move down") { model.moveWindow(window, by: 1) }
+        Button("Move up") { m.moveWindow(window, by: -1) }
+        Button("Move down") { m.moveWindow(window, by: 1) }
         Menu("Move to session") {
-            ForEach(model.sessions.map(\.name).filter { $0 != window.session }, id: \.self) { name in
-                Button(name) { model.moveWindow(window, toSession: name) }
+            ForEach(m.sessions.map(\.name).filter { $0 != window.session }, id: \.self) { name in
+                Button(name) { m.moveWindow(window, toSession: name) }
             }
             Divider()
-            Button("New session…") { renameText = ""; movingToNewSession = window }
+            Button("New session…") { target = m; renameText = ""; movingToNewSession = window }
         }
         Divider()
-        Button("Copy all output") { model.userSelected(window.id); model.copyOutput() }
-        Button("Show as terminal") { model.userSelected(window.id); model.toggleRawTerminal() }
+        Button("Copy all output") { m.userSelected(window.id); m.copyOutput() }
+        Button("Show as terminal") { m.userSelected(window.id); m.toggleRawTerminal() }
         Divider()
-        Button("Close window…", role: .destructive) { closing = window }
+        Button("Close window…", role: .destructive) { target = m; closing = window }
     }
 
-    @ViewBuilder private func paneMenu(_ pane: TmuxWindow) -> some View {
-        Button("Move to its own window") { model.breakPane(pane) }
+    @ViewBuilder private func paneMenu(_ pane: TmuxWindow, _ m: TmuxModel) -> some View {
+        Button("Move to its own window") { m.breakPane(pane) }
         Menu("Move into window") {
-            ForEach(model.sessions) { session in
+            ForEach(m.sessions) { session in
                 Section(session.name) {
                     ForEach(session.windows.filter { $0.windowID != pane.windowID }) { w in
-                        Button(model.displayTitle(w)) { model.joinPane(pane, into: w) }
+                        Button(m.displayTitle(w)) { m.joinPane(pane, into: w) }
                     }
                 }
             }
         }
         Divider()
-        Button("Swap with previous pane") { model.swapPane(pane, previous: true) }
-        Button("Swap with next pane") { model.swapPane(pane, previous: false) }
-        Button(pane.zoomed ? "Unzoom" : "Zoom (fill the window)") { model.toggleZoom(pane) }
+        Button("Swap with previous pane") { m.swapPane(pane, previous: true) }
+        Button("Swap with next pane") { m.swapPane(pane, previous: false) }
+        Button(pane.zoomed ? "Unzoom" : "Zoom (fill the window)") { m.toggleZoom(pane) }
         Divider()
-        Button("Copy all output") { model.userSelected(pane.id); model.copyOutput() }
+        Button("Copy all output") { m.userSelected(pane.id); m.copyOutput() }
         Divider()
-        Button("Close pane…", role: .destructive) { closing = pane }
+        Button("Close pane…", role: .destructive) { target = m; closing = pane }
     }
 
-    @ViewBuilder private func sessionMenu(_ session: String) -> some View {
-        Button("New Claude window") { model.newWindow(claude: true, in: session) }
-        Button("New terminal window") { model.newWindow(claude: false, in: session) }
+    @ViewBuilder private func sessionMenu(_ session: String, _ m: TmuxModel) -> some View {
+        Button("New Claude window") { m.newWindow(claude: true, in: session) }
+        Button("New terminal window") { m.newWindow(claude: false, in: session) }
         Divider()
-        Button("Rename session…") { renameText = session; renaming = .session(session) }
-        Button("Close session…", role: .destructive) { closingSession = session }
+        Button("Rename session…") { target = m; renameText = session; renaming = .session(session) }
+        Button("Close session…", role: .destructive) { target = m; closingSession = session }
     }
 
     private var statusBar: some View {
@@ -210,17 +225,20 @@ struct ContentView: View {
             Circle()
                 .fill(model.connected ? Color.green : Color.orange)
                 .frame(width: 7, height: 7)
-            Text(model.connected ? "Connected to \(Remote.host)" : "Reconnecting…")
+            Text(app.servers.count > 1 ? "\(app.servers.filter(\.connected).count) of \(app.servers.count) servers connected"
+                 : model.connected ? "Connected to \(model.host)" : "Reconnecting…")
                 .lineLimit(1)
             Spacer()
-            Button {
-                renameText = ""
-                newSessionPrompt = true
+            Menu {
+                Button("Add server…") { addingServer = true }
+                Button("New session on \(model.host)…") { target = model; renameText = ""; newSessionPrompt = true }
             } label: {
                 Image(systemName: "plus")
             }
-            .buttonStyle(.borderless)
-            .help("New session")
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .fixedSize()
+            .help("Add a server or a session")
         }
         .font(.caption)
         .foregroundStyle(.secondary)
@@ -273,7 +291,8 @@ struct ContentView: View {
                 Button("New Claude window") { model.newWindow(claude: true) }
                 Button("New terminal window") { model.newWindow(claude: false) }
                 Divider()
-                Button("New session…") { renameText = ""; newSessionPrompt = true }
+                Button("New session…") { target = model; renameText = ""; newSessionPrompt = true }
+                Button("Add server…") { addingServer = true }
             } label: {
                 Label("New", systemImage: "plus")
             } primaryAction: {
@@ -292,9 +311,9 @@ struct ContentView: View {
             Menu {
                 if let w = model.selectedWindow {
                     let window = w.isPane ? (model.window(containing: w) ?? w) : w
-                    Section("Window") { windowMenu(window) }
+                    Section("Window") { windowMenu(window, model) }
                     if let pane = w.isPane ? w : window.paneItems.first(where: { $0.paneID == window.paneID }) {
-                        Section("Pane") { paneMenu(pane) }
+                        Section("Pane") { paneMenu(pane, model) }
                     }
                 }
             } label: {
@@ -370,38 +389,65 @@ struct WindowRow: View {
     }
 }
 
-/// First launch: ask which machine to connect to.
-struct SetupView: View {
-    @EnvironmentObject private var model: TmuxModel
-    @AppStorage("host") private var host = ""
+/// Adding a server: pick a host from ~/.ssh/config or type one. Also the first-launch screen.
+struct AddServerView: View {
+    var sheet = false
+    @EnvironmentObject private var app: AppModel
+    @Environment(\.dismiss) private var dismiss
     @State private var draft = ""
     @State private var checking = false
     @State private var error: String?
+    @State private var forward = false
+    private let configured = AppModel.configuredHosts()
 
     var body: some View {
-        VStack(spacing: 18) {
-            Image(systemName: "rectangle.stack").font(.system(size: 44)).foregroundStyle(.secondary)
-            Text("Connect to your tmux machine").font(.title2.weight(.semibold))
-            Text("Enter the SSH host you normally use, like the name after `ssh` in your terminal. It must work without a password prompt (an SSH key or agent).")
+        VStack(spacing: 16) {
+            Image(systemName: "server.rack").font(.system(size: 40)).foregroundStyle(.secondary)
+            Text(sheet ? "Add a server" : "Connect to your tmux machine").font(.title2.weight(.semibold))
+            Text("Pick a host from your SSH config or type one. It must connect without a password prompt (an SSH key or agent).")
                 .multilineTextAlignment(.center)
                 .foregroundStyle(.secondary)
                 .frame(maxWidth: 420)
+            let available = configured.filter { h in !app.servers.contains { $0.host == h } }
+            if !available.isEmpty {
+                ScrollView {
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 130), spacing: 8)], spacing: 8) {
+                        ForEach(available, id: \.self) { host in
+                            Button { draft = host } label: {
+                                Label(host, systemImage: "server.rack")
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .lineLimit(1)
+                            }
+                            .buttonStyle(.bordered)
+                            .tint(draft == host ? .accentColor : nil)
+                        }
+                    }
+                }
+                .frame(maxWidth: 440, maxHeight: 150)
+            }
             TextField("SSH host", text: $draft, prompt: Text("my-server or user@192.168.1.20"))
                 .textFieldStyle(.roundedBorder)
                 .frame(width: 320)
                 .onSubmit(connect)
+            Toggle("Run the port forwards from my SSH config for this server", isOn: $forward)
+                .disabled(PortForwarder.configuredPorts(draft.trimmingCharacters(in: .whitespaces)).isEmpty)
+                .help("Uses the LocalForward lines in ~/.ssh/config for this host")
             if let error {
                 Text(error).font(.callout).foregroundStyle(.red).frame(maxWidth: 420).multilineTextAlignment(.center)
             }
-            Button(action: connect) {
-                if checking { ProgressView().controlSize(.small) } else { Text("Connect") }
+            HStack {
+                if sheet { Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction) }
+                Button(action: connect) {
+                    if checking { ProgressView().controlSize(.small) } else { Text("Connect") }
+                }
+                .buttonStyle(.borderedProminent)
+                .keyboardShortcut(.defaultAction)
+                .disabled(draft.trimmingCharacters(in: .whitespaces).isEmpty || checking)
             }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.large)
-            .disabled(draft.trimmingCharacters(in: .whitespaces).isEmpty || checking)
         }
-        .padding(40)
+        .padding(32)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .frame(minWidth: sheet ? 520 : nil)
     }
 
     private func connect() {
@@ -409,19 +455,106 @@ struct SetupView: View {
         guard !candidate.isEmpty else { return }
         checking = true
         error = nil
-        UserDefaults.standard.set(candidate, forKey: "host")
         Task {
-            let result = await Remote.run("command -v tmux >/dev/null && echo ok || echo notmux", timeout: 20)
+            let result = await Remote(host: candidate).run("command -v tmux >/dev/null && echo ok || echo notmux", timeout: 20)
             checking = false
             let out = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
             if result.ok && out == "ok" {
-                host = candidate
-                await model.refresh()
+                app.addServer(candidate)
+                if forward { app.forwarders[candidate]?.setEnabled(true) }
+                if sheet { dismiss() }
             } else {
-                UserDefaults.standard.removeObject(forKey: "host")
                 error = out == "notmux" ? "Connected, but tmux isn't installed on that machine."
                     : "Couldn't connect: \(result.stderr.trimmingCharacters(in: .whitespacesAndNewlines))"
             }
         }
+    }
+}
+
+/// A server's heading in the sidebar: its name, connection, port forwarding and menu.
+struct ServerHeader: View {
+    @ObservedObject var server: TmuxModel
+    @ObservedObject var forwarder: PortForwarder
+    let showName: Bool
+    var onNewSession: () -> Void
+    var onRemove: () -> Void
+    @State private var showingPorts = false
+    @State private var confirmRemove = false
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Circle().fill(server.connected ? Color.green : Color.orange).frame(width: 7, height: 7)
+            Text(server.host).font(.headline).foregroundStyle(.primary)
+            if forwarder.enabled {
+                let f = forwarder
+                Button { showingPorts.toggle() } label: {
+                    Label("\(f.activePorts.count)", systemImage: "arrow.left.arrow.right")
+                        .font(.caption)
+                        .foregroundStyle(f.running ? (f.busyPorts.isEmpty ? Color.green : Color.orange) : Color.secondary)
+                }
+                .buttonStyle(.borderless)
+                .help("Port forwarding")
+                .popover(isPresented: $showingPorts) { PortsView(forwarder: f) }
+            }
+            Spacer()
+            Menu {
+                Button("New session…", action: onNewSession)
+                do {
+                    let f = forwarder
+                    Divider()
+                    Toggle("Port forwarding", isOn: Binding(get: { f.enabled }, set: { f.setEnabled($0) }))
+                        .disabled(f.ports.isEmpty)
+                    if f.enabled { Button("Show forwarded ports…") { showingPorts = true } }
+                }
+                Divider()
+                Button("Remove server…", role: .destructive) { confirmRemove = true }
+            } label: {
+                Image(systemName: "ellipsis.circle")
+            }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .fixedSize()
+        }
+        .padding(.vertical, 2)
+        .confirmationDialog("Remove \(server.host)?", isPresented: $confirmRemove) {
+            Button("Remove server", role: .destructive, action: onRemove)
+        } message: {
+            Text("This only disconnects the app. Your tmux sessions keep running on the server.")
+        }
+    }
+}
+
+struct PortsView: View {
+    @ObservedObject var forwarder: PortForwarder
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Port forwarding · \(forwarder.host)").font(.headline)
+            Text(forwarder.running
+                 ? "\(forwarder.activePorts.count) of \(forwarder.ports.count) ports forwarded to this Mac."
+                 : "Connecting… (retries every 5 seconds)")
+                .font(.callout).foregroundStyle(.secondary)
+            if !forwarder.busyPorts.isEmpty {
+                Text("\(forwarder.busyPorts.count) ports are already used on this Mac, probably by another SSH session such as VS Code. They'll work once that session closes and forwarding reconnects.")
+                    .font(.caption).foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if let e = forwarder.lastError { Text(e).font(.caption).foregroundStyle(.red) }
+            ScrollView {
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 70), spacing: 6)], alignment: .leading, spacing: 6) {
+                    ForEach(forwarder.ports, id: \.self) { port in
+                        let busy = forwarder.busyPorts.contains(port)
+                        HStack(spacing: 4) {
+                            Circle().fill(busy ? Color.orange : (forwarder.running ? Color.green : Color.secondary)).frame(width: 6, height: 6)
+                            Text("\(port)").font(.caption.monospacedDigit())
+                        }
+                        .help(busy ? "Already in use on this Mac" : "localhost:\(port) → \(forwarder.host)")
+                    }
+                }
+            }
+            .frame(maxHeight: 220)
+        }
+        .padding(16)
+        .frame(width: 340)
     }
 }

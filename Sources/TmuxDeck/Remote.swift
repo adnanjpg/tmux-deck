@@ -1,15 +1,13 @@
 import Foundation
 
-/// Runs commands on the work machine over SSH.
+/// Runs commands on one server over SSH.
 ///
-/// Every call shares one multiplexed SSH connection (ControlMaster), so sidebar
-/// refreshes and button clicks cost a few milliseconds instead of a new handshake.
-/// Port forwards from ~/.ssh/config are cleared so the app never fights your
-/// normal SSH session for local ports.
-enum Remote {
-    static var host: String {
-        UserDefaults.standard.string(forKey: "host")?.trimmingCharacters(in: .whitespaces) ?? ""
-    }
+/// Every call shares one multiplexed SSH connection per server (ControlMaster), so
+/// sidebar refreshes and button clicks cost a few milliseconds instead of a new
+/// handshake. Port forwards from ~/.ssh/config are cleared on this connection;
+/// `PortForwarder` runs them separately when you turn them on.
+struct Remote: Hashable {
+    let host: String
 
     static let controlPath = "~/.ssh/tmuxdeck-%C"
 
@@ -34,12 +32,12 @@ enum Remote {
     }
 
     /// Runs `script` with the remote login shell and returns its output.
-    static func run(_ script: String, input: String? = nil, timeout: TimeInterval = 15) async -> Result {
+    func run(_ script: String, input: String? = nil, timeout: TimeInterval = 15) async -> Result {
         await run(script, data: input.map { Data($0.utf8) }, timeout: timeout)
     }
 
     /// Uploads `data` into ~/.cache/tmuxdeck on the remote machine and returns its absolute path.
-    static func upload(_ data: Data, fileName: String) async -> String? {
+    func upload(_ data: Data, fileName: String) async -> String? {
         let dir = "~/.cache/tmuxdeck"
         let result = await run("mkdir -p \(dir) && cat > \(dir)/\(sq(fileName)) && cd \(dir) && printf '%s/%s' \"$PWD\" \(sq(fileName))",
                                data: data, timeout: 120)
@@ -47,8 +45,8 @@ enum Remote {
         return result.ok && path.hasPrefix("/") ? path : nil
     }
 
-    static func run(_ script: String, data input: Data?, timeout: TimeInterval = 15) async -> Result {
-        let args = baseOptions + ["-o", "BatchMode=yes", host, script]
+    func run(_ script: String, data input: Data?, timeout: TimeInterval = 15) async -> Result {
+        let args = Self.baseOptions + ["-o", "BatchMode=yes", host, script]
         return await Task.detached {
             let process = Process()
             process.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
@@ -80,8 +78,8 @@ enum Remote {
     }
 
     /// Arguments for an interactive `ssh -t` that runs `script` on the remote side.
-    static func interactiveArguments(_ script: String) -> [String] {
-        baseOptions + ["-t", host, script]
+    func interactiveArguments(_ script: String) -> [String] {
+        Self.baseOptions + ["-t", host, script]
     }
 }
 

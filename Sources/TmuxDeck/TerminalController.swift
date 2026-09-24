@@ -16,8 +16,11 @@ final class TerminalController: NSObject, LocalProcessTerminalViewDelegate {
     var onStateChange: (() -> Void)?
     private var pendingWindow: String?
 
-    init(session: String) {
+    let remote: Remote
+
+    init(session: String, remote: Remote) {
         self.session = session
+        self.remote = remote
         self.viewSession = viewSessionPrefix + session + "-" + String(UUID().uuidString.prefix(4)).lowercased()
         self.view = LocalProcessTerminalView(frame: NSRect(x: 0, y: 0, width: 800, height: 600))
         super.init()
@@ -40,12 +43,12 @@ final class TerminalController: NSObject, LocalProcessTerminalViewDelegate {
         if !alive {
             connect(initialWindow: windowID)
         } else {
-            Task { _ = await Remote.run("tmux select-window -t \(sq(viewSession + ":" + windowID))") }
+            Task { _ = await remote.run("tmux select-window -t \(sq(viewSession + ":" + windowID))") }
         }
         if let paneID {
             Task {
                 try? await Task.sleep(for: .milliseconds(alive ? 0 : 800))
-                _ = await Remote.run("tmux select-pane -t \(sq(paneID))")
+                _ = await remote.run("tmux select-pane -t \(sq(paneID))")
             }
         }
     }
@@ -63,7 +66,7 @@ final class TerminalController: NSObject, LocalProcessTerminalViewDelegate {
         env["LANG"] = env["LANG"] ?? "en_US.UTF-8"
         alive = true
         view.startProcess(executable: "/usr/bin/ssh",
-                          args: Remote.interactiveArguments(script),
+                          args: remote.interactiveArguments(script),
                           environment: env.map { "\($0.key)=\($0.value)" })
         onStateChange?()
     }
