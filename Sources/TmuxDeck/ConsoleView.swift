@@ -4,13 +4,14 @@ import SwiftUI
 /// A plain terminal window shown as a normal Mac text view: select, copy and
 /// search output like any document, and type commands in the box underneath.
 struct ConsoleView: View {
+    @Environment(\.theme) private var theme
     @EnvironmentObject private var model: TmuxModel
     let window: TmuxWindow
     @State private var output = ""
 
     var body: some View {
         VStack(spacing: 0) {
-            OutputTextView(text: output)
+            OutputTextView(text: output, theme: theme)
             Divider()
             ComposeBar(window: window)
                 .id(window.id)
@@ -31,6 +32,7 @@ struct ConsoleView: View {
 
 struct OutputTextView: NSViewRepresentable {
     let text: String
+    let theme: AppTheme
 
     func makeNSView(context: Context) -> NSScrollView {
         let scroll = NSTextView.scrollableTextView()
@@ -47,7 +49,10 @@ struct OutputTextView: NSViewRepresentable {
     }
 
     func updateNSView(_ scroll: NSScrollView, context: Context) {
-        guard let tv = scroll.documentView as? NSTextView, tv.string != text else { return }
+        guard let tv = scroll.documentView as? NSTextView else { return }
+        tv.backgroundColor = theme.terminalBackground ?? theme.background
+        tv.textColor = theme.terminalForeground ?? theme.foreground ?? .textColor
+        guard tv.string != text else { return }
         let clip = scroll.contentView
         let atBottom = clip.bounds.maxY >= tv.frame.height - 40
         let selection = tv.selectedRanges

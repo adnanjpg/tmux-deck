@@ -6,6 +6,7 @@ import SwiftUI
 /// When the box is empty, navigation keys go straight to the window so Claude's
 /// menus (arrows, Enter, Esc, Tab) keep working without clicking into the terminal.
 struct ComposeBar: View {
+    @Environment(\.theme) private var theme
     @EnvironmentObject private var model: TmuxModel
     let window: TmuxWindow
     @State private var text = ""
@@ -62,9 +63,9 @@ struct ComposeBar: View {
                 }
                 .padding(.horizontal, 10)
                 .padding(.vertical, 8)
-                .background(RoundedRectangle(cornerRadius: 10).fill(Color(nsColor: .textBackgroundColor)))
+                .background(RoundedRectangle(cornerRadius: 10).fill(theme.input))
                 .overlay(RoundedRectangle(cornerRadius: 10)
-                    .strokeBorder(dropTargeted ? Color.accentColor : Color(nsColor: .separatorColor), lineWidth: dropTargeted ? 2 : 1))
+                    .strokeBorder(dropTargeted ? theme.tint : theme.line, lineWidth: dropTargeted ? 2 : 1))
 
                 if window.state.isClaude {
                     Button { model.send(keys: ["Escape"], to: window) } label: {
@@ -86,7 +87,7 @@ struct ComposeBar: View {
         }
         .font(.system(size: 13))
         .padding(12)
-        .background(.bar)
+        .background(theme.panel)
         .onDrop(of: [.fileURL, .image], isTargeted: $dropTargeted) { providers in
             loadImages(from: providers)
             return true

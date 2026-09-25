@@ -3,6 +3,7 @@ import SwiftUI
 /// A Claude window shown as a normal Mac chat: your messages, Claude's replies,
 /// and the tools it used. Claude keeps running in tmux; this just reads its log.
 struct ChatView: View {
+    @Environment(\.theme) private var theme
     @EnvironmentObject private var model: TmuxModel
     let window: TmuxWindow
     @ObservedObject var store: ChatStore
@@ -97,9 +98,9 @@ struct ChatView: View {
                     .id(window.id)
                 StatusBar(window: window)
             }
-            .background(.bar)
+            .background(theme.panel)
         }
-        .background(Color(nsColor: .textBackgroundColor))
+        .background(theme.bg)
         .task(id: store.sessionID) {
             await store.catchUp()
             while !Task.isCancelled {
@@ -140,7 +141,7 @@ extension ChatView {
         .labelStyle(.titleAndIcon)
         .padding(.horizontal, 16)
         .padding(.vertical, 6)
-        .background(.bar)
+        .background(theme.panel)
         .overlay(alignment: .bottom) { Divider() }
     }
 }
@@ -260,6 +261,7 @@ struct TurnView: View {
 }
 
 struct MessageCard<Content: View>: View {
+    @Environment(\.theme) private var theme
     enum Role { case you, claude }
     let role: Role
     @Binding var collapsed: Bool
@@ -304,15 +306,15 @@ struct MessageCard<Content: View>: View {
         .padding(role == .you ? 12 : 0)
         .background {
             if role == .you {
-                RoundedRectangle(cornerRadius: 12).fill(Color.accentColor.opacity(0.09))
-                RoundedRectangle(cornerRadius: 12).strokeBorder(Color.accentColor.opacity(0.18))
+                RoundedRectangle(cornerRadius: 12).fill(theme.tint.opacity(0.09))
+                RoundedRectangle(cornerRadius: 12).strokeBorder(theme.tint.opacity(0.18))
             }
         }
     }
 
     private var avatar: some View {
         ZStack {
-            Circle().fill(role == .you ? Color.accentColor : Color.orange.opacity(0.85))
+            Circle().fill(role == .you ? theme.tint : Color.orange.opacity(0.85))
             Image(systemName: role == .you ? "person.fill" : "sparkle")
                 .font(.system(size: 11, weight: .semibold))
                 .foregroundStyle(.white)
@@ -525,6 +527,7 @@ struct ThinkingRow: View {
 }
 
 struct ToolRow: View {
+    @Environment(\.theme) private var theme
     let name: String
     let summary: String
     let added: Int
@@ -574,13 +577,13 @@ struct ToolRow: View {
                         .padding(10)
                 }
                 .frame(maxHeight: 320)
-                .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
-                .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Color(nsColor: .separatorColor)))
+                .background(theme.code, in: RoundedRectangle(cornerRadius: 8))
+                .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(theme.line))
             }
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
-        .background(Color.secondary.opacity(0.06), in: RoundedRectangle(cornerRadius: 10))
+        .background(theme.widget, in: RoundedRectangle(cornerRadius: 10))
     }
 
     private var displaySummary: String {
@@ -615,6 +618,7 @@ struct ToolRow: View {
 
 /// A Markdown table: bold header, aligned columns, zebra rows, inline formatting in cells.
 struct TableView: View {
+    @Environment(\.theme) private var theme
     let header: [String]
     let alignments: [MarkdownText.TableAlignment]
     let rows: [[String]]
@@ -640,7 +644,7 @@ struct TableView: View {
                 }
             }
             .clipShape(RoundedRectangle(cornerRadius: 8))
-            .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Color(nsColor: .separatorColor)))
+            .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(theme.line))
             .padding(.bottom, 2)
         }
     }
@@ -663,6 +667,7 @@ struct TableView: View {
 /// Renders Claude's Markdown: paragraphs with inline formatting, headings,
 /// and code blocks. Each block is selectable like normal text.
 struct MarkdownText: View {
+    @Environment(\.theme) private var theme
     let blocks: [Block]
 
     enum Block: Hashable {
@@ -770,13 +775,13 @@ struct MarkdownText: View {
                         .padding(.top, 4)
                 case .code(let s):
                     ScrollView(.horizontal) {
-                        Text(s)
+                        Text(SyntaxHighlighter.highlight(s, theme: theme))
                             .font(.system(.callout, design: .monospaced))
                             .textSelection(.enabled)
                             .padding(12)
                     }
-                    .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
-                    .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Color(nsColor: .separatorColor)))
+                    .background(theme.code, in: RoundedRectangle(cornerRadius: 8))
+                    .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(theme.line))
                 }
             }
         }

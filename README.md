@@ -18,6 +18,7 @@ tmux stays the backend. Your sessions keep running on the server when the app cl
 - **Every tmux action as a button or menu item:** new window or session, split, even out panes, zoom, swap, move a pane into its own window or into another window, move windows between sessions, rename, close. You can also drag panes and windows around in the sidebar.
 - **A raw terminal view** (⌥⌘T) for anything interactive, like vim or htop.
 - **Restore lost sessions.** The app remembers each server's sessions and windows. If tmux loses them (a crash, a reboot), the sidebar offers Restore previous sessions: pick windows and it recreates them in their folders, resuming each Claude conversation with `claude --resume`. It also uses the session records Claude Code leaves on the server, so it can recover Claude windows it never saw. Also in each server's ••• menu.
+- **VS Code themes.** Settings → Themes lists every theme in VS Code, Cursor and your installed VS Code extensions (following `include` chains), plus Match VS Code to follow VS Code's current theme, and Import… for a theme `.json` or `.vsix`. A theme colors the chat, sidebar, input, tool rows, code blocks (with syntax highlighting from the theme's token colors), the console and the raw terminal (16 ANSI colors, cursor, selection).
 - **Split view.** Drag a window from the sidebar onto the main area: drop on an edge to split left, right, above or below, or in the middle to replace. Drag a tile's title bar to move it, drag the dividers to resize, ✕ to close a tile, or ⇧⌘U to go back to one. Right-click a window for Open to the right / Open below. Clicking a window in the sidebar opens it on its own (or focuses its tile if it's already on screen). Splits nest, animate, and are remembered.
 - **Several servers at once.** Add servers from the + button (it lists the hosts in your `~/.ssh/config`); each gets its own section in the sidebar.
 - **Port forwarding per server.** Turn it on in a server's ••• menu to run that host's `LocalForward` rules from your SSH config in the background. It reconnects on its own and shows which ports are forwarding and which are already taken on your Mac.
@@ -55,6 +56,7 @@ To update, `git pull` and run `./build-app.sh` again.
 | Pull requests panel | ⇧⌘P |
 | Close other tiles | ⇧⌘U |
 | Full screen | ⌃⌘F |
+| Settings (themes, sounds) | ⌘, |
 | Previous / next window | ⌘[ / ⌘] |
 | Go to window 1–9 | ⌘1 … ⌘9 |
 

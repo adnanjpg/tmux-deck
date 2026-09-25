@@ -376,6 +376,7 @@ private struct DividerHandle: View {
 
 /// A tile: its title bar (when split), the window, focus ring and drop zones.
 private struct TileContainer<Content: View>: View {
+    @Environment(\.theme) private var theme
     @ObservedObject var layout: LayoutModel
     @EnvironmentObject private var app: AppModel
     let leafID: String
@@ -392,12 +393,12 @@ private struct TileContainer<Content: View>: View {
             content
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .background(Color(nsColor: .textBackgroundColor))
+        .background(theme.bg)
         .clipShape(RoundedRectangle(cornerRadius: split ? 10 : 0))
         .overlay {
             if split {
                 RoundedRectangle(cornerRadius: 10)
-                    .strokeBorder(focused ? Color.accentColor.opacity(0.75) : Color(nsColor: .separatorColor),
+                    .strokeBorder(focused ? theme.tint.opacity(0.75) : theme.line,
                                   lineWidth: focused ? 2 : 1)
             }
         }
@@ -439,6 +440,7 @@ private struct TileContainer<Content: View>: View {
 }
 
 private struct TileHeader: View {
+    @Environment(\.theme) private var theme
     @ObservedObject var layout: LayoutModel
     @EnvironmentObject private var app: AppModel
     let leafID: String
@@ -475,7 +477,7 @@ private struct TileHeader: View {
         .font(.callout)
         .padding(.horizontal, 10)
         .frame(height: 30)
-        .background(focused ? Color.accentColor.opacity(0.08) : Color.secondary.opacity(0.05))
+        .background(focused ? theme.tint.opacity(0.08) : theme.panel)
         .overlay(alignment: .bottom) { Divider() }
         .contentShape(Rectangle())
         .onTapGesture { layout.focus(leafID) }

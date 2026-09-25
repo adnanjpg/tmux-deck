@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import UniformTypeIdentifiers
 
 @main
 struct TmuxDeckApp: App {
@@ -26,6 +27,7 @@ struct TmuxDeckApp: App {
                     .keyboardShortcut("t")
             }
             CommandGroup(after: .sidebar) {
+                Button("Choose Theme…") { NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil) }
                 Button("Toggle Full Screen") { AppDelegate.toggleFullScreen() }
                     .keyboardShortcut("f", modifiers: [.command, .control])
             }
@@ -54,7 +56,11 @@ struct TmuxDeckApp: App {
         }
 
         Settings {
-            SettingsView()
+            TabView {
+                SettingsView().tabItem { Label("General", systemImage: "gearshape") }
+                ThemeSettings().tabItem { Label("Themes", systemImage: "paintpalette") }
+            }
+            .frame(width: 560)
         }
     }
 }
@@ -63,14 +69,22 @@ struct TmuxDeckApp: App {
 /// for the active server.
 struct RootView: View {
     @EnvironmentObject private var app: AppModel
+    @ObservedObject private var themes = ThemeManager.shared
 
     var body: some View {
-        if let server = app.activeServer {
-            ContentView()
-                .environmentObject(server)
-        } else {
-            AddServerView()
+        let theme = themes.theme
+        Group {
+            if let server = app.activeServer {
+                ContentView()
+                    .environmentObject(server)
+            } else {
+                AddServerView()
+            }
         }
+        .environment(\.theme, theme)
+        .tint(theme.tint)
+        .foregroundStyle(theme.fg ?? Color.primary)
+        .preferredColorScheme(theme.isDark.map { $0 ? .dark : .light })
     }
 }
 
@@ -139,5 +153,94 @@ struct SettingsView: View {
                 .buttonStyle(.borderless)
                 .help("Play")
         }
+    }
+}
+
+/// Pick a VS Code theme (built-in, from extensions, or imported), match VS Code, or use System.
+struct ThemeSettings: View {
+    @ObservedObject private var themes = ThemeManager.shared
+    @State private var search = ""
+    @State private var importError: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                TextField("Search themes", text: $search).textFieldStyle(.roundedBorder)
+                Button("Import…", action: importTheme)
+                    .help("Import a VS Code theme .json file or a .vsix extension")
+                Button { themes.scan() } label: { Image(systemName: "arrow.clockwise") }
+                    .help("Look for newly installed themes")
+            }
+            if let importError { Text(importError).font(.caption).foregroundStyle(.red) }
+            List {
+                Section {
+                    row(title: "System", subtitle: "Plain macOS light and dark", id: "system", preview: nil)
+                    row(title: "Match VS Code",
+                        subtitle: "Follows VS Code's current theme" + (ThemeManager.vscodeColorTheme().map { " (\($0))" } ?? ""),
+                        id: "vscode", preview: nil)
+                }
+                let filtered = themes.available.filter { search.isEmpty || $0.label.localizedCaseInsensitiveContains(search) || $0.source.localizedCaseInsensitiveContains(search) }
+                let light = filtered.filter { !$0.isDark }, dark = filtered.filter(\.isDark)
+                if !light.isEmpty {
+                    Section("Light") { ForEach(light) { t in row(title: t.label, subtitle: t.source, id: t.id, preview: t) } }
+                }
+                if !dark.isEmpty {
+                    Section("Dark") { ForEach(dark) { t in row(title: t.label, subtitle: t.source, id: t.id, preview: t) } }
+                }
+            }
+            .frame(minHeight: 380)
+            Text("\(themes.available.count) themes from VS Code, Cursor, your installed extensions and imports.")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+        .padding(16)
+    }
+
+    private func row(title: String, subtitle: String, id: String, preview: VSCodeThemeRef?) -> some View {
+        Button { themes.select(id) } label: {
+            HStack(spacing: 10) {
+                if let preview { Swatch(ref: preview) } else {
+                    Image(systemName: id == "system" ? "macwindow" : "chevron.left.forwardslash.chevron.right")
+                        .frame(width: 44, height: 26)
+                }
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(title)
+                    Text(subtitle).font(.caption).foregroundStyle(.secondary)
+                }
+                Spacer()
+                if themes.selection == id { Image(systemName: "checkmark").foregroundStyle(Color.accentColor) }
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func importTheme() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.json, UTType(filenameExtension: "vsix") ?? .zip]
+        panel.allowsMultipleSelection = false
+        if panel.runModal() == .OK, let url = panel.url {
+            importError = themes.importTheme(from: url)
+        }
+    }
+}
+
+/// A tiny preview: background, a line of text, and the accent.
+private struct Swatch: View {
+    let ref: VSCodeThemeRef
+    @State private var theme: AppTheme?
+
+    var body: some View {
+        ZStack(alignment: .leading) {
+            RoundedRectangle(cornerRadius: 5).fill(Color(nsColor: theme?.background ?? .windowBackgroundColor))
+            VStack(alignment: .leading, spacing: 3) {
+                Capsule().fill(Color(nsColor: theme?.tokenColor("keyword") ?? theme?.accent ?? .gray)).frame(width: 18, height: 3)
+                Capsule().fill(Color(nsColor: theme?.foreground ?? .gray)).frame(width: 28, height: 3)
+                Capsule().fill(Color(nsColor: theme?.tokenColor("string") ?? .gray)).frame(width: 22, height: 3)
+            }
+            .padding(.leading, 6)
+            RoundedRectangle(cornerRadius: 5).strokeBorder(Color(nsColor: theme?.border ?? .separatorColor))
+        }
+        .frame(width: 44, height: 26)
+        .task { theme = ThemeManager.load(ref) }
     }
 }

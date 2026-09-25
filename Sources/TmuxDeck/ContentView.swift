@@ -2,6 +2,7 @@ import AppKit
 import SwiftUI
 
 struct ContentView: View {
+    @Environment(\.theme) private var theme
     @EnvironmentObject private var model: TmuxModel
     @State private var renaming: RenameTarget?
     @State private var renameText = ""
@@ -137,6 +138,8 @@ struct ContentView: View {
             }
         }
         .listStyle(.sidebar)
+        .scrollContentBackground(theme.sidebar == nil ? .automatic : .hidden)
+        .background { if let s = theme.sidebar { Color(nsColor: s) } }
         .safeAreaInset(edge: .bottom) { statusBar }
     }
 
