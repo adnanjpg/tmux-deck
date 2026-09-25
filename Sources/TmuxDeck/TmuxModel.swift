@@ -144,6 +144,7 @@ final class TmuxModel: ObservableObject, Identifiable {
 
     private(set) var needsYouCount = 0
     private var lastClaude: [String: (ClaudeSessionInfo, Date)] = [:]
+    private var lastStatus: [String: ([String], Date)] = [:]
     /// Why a sent message looks stuck, by pending message id (shown on the message).
     @Published var stuckReasons: [UUID: String] = [:]
     private var autoEnter: [UUID: (count: Int, last: Date)] = [:]
@@ -321,6 +322,13 @@ final class TmuxModel: ObservableObject, Identifiable {
         if newSuggestions != suggestions { suggestions = newSuggestions }
         if newActivities != activities { activities = newActivities }
         recoverStuckMessages(allItems, captures: captures)
+        // Keep the last good status line for a minute when a read finds none (Claude's
+        // screen mid-redraw, or a menu covering it), so the chips don't flicker away.
+        let now = Date()
+        for (id, lines) in newStatusLines { lastStatus[id] = (lines, now) }
+        for (id, last) in lastStatus where newStatusLines[id] == nil && now.timeIntervalSince(last.1) < 60 {
+            if allItems.contains(where: { $0.id == id }) { newStatusLines[id] = last.0 }
+        }
         if newStatusLines != statusLines { statusLines = newStatusLines }
         let claudeIDs = allItems.compactMap(\.claude?.sessionID)
         fetchMissingTitles(claudeIDs)
