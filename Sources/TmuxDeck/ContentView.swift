@@ -60,7 +60,9 @@ struct ContentView: View {
             detail
         }
         .navigationTitle(model.selectedWindow.map(model.displayTitle) ?? "Tmux Deck")
-        .navigationSubtitle(model.selectedWindow.map { "\($0.session) · \(model.host)" } ?? model.host)
+        .navigationSubtitle(model.selectedWindow.map { w in
+            (w.state.isClaude ? "\(w.state.label) · " : "") + "\(w.session) · \(model.host)"
+        } ?? model.host)
         .toolbar { toolbar }
         .alert(renameTitle, isPresented: Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } })) {
             TextField("Name", text: $renameText)
@@ -195,7 +197,7 @@ struct ContentView: View {
                 server.handleDrop(ids, onto: nil, session: session.name)
             }
             ForEach(open ? session.windows : []) { window in
-                WindowRow(window: window, title: server.displayTitle(window))
+                WindowRow(window: window, title: server.displayTitle(window), done: server.unseenDone.contains(window.id))
                     .tag(tag(window.id))
                     .contextMenu { windowMenu(window, server) }
                     .draggable("\(server.host)#\(window.id)")
@@ -456,6 +458,7 @@ struct WindowRow: View {
     let window: TmuxWindow
     let title: String
     var compact = false
+    var done = false
 
     var body: some View {
         HStack(spacing: 8) {
@@ -469,6 +472,8 @@ struct WindowRow: View {
                     .foregroundStyle(subtitleColor)
                     .lineLimit(1)
             }
+            Spacer(minLength: 4)
+            StateBadge(state: window.state, done: done, compact: true)
         }
         .padding(.vertical, 2)
     }
@@ -751,5 +756,47 @@ struct RestoreView: View {
         if let id = c.claudeSessionID, let t = server.titles[id] { return t }
         if c.isClaude { return "Claude · \(c.claudeSessionID!.prefix(8))" }
         return c.name
+    }
+}
+
+/// Working / Needs you / Done, as a small coloured pill (or just the symbol when compact).
+struct StateBadge: View {
+    let state: WindowState
+    var done = false
+    var compact = false
+
+    var body: some View {
+        switch state {
+        case .claudeWorking:
+            pill(color: .blue) {
+                ProgressView().controlSize(.mini).tint(.blue)
+                if !compact { Text("Working") }
+            }
+            .help("Claude is working")
+        case .claudeNeedsYou:
+            pill(color: .orange) {
+                Image(systemName: "exclamationmark.bubble.fill")
+                if !compact { Text("Needs you") }
+            }
+            .help("Claude is waiting for your answer")
+        case .claudeReady where done:
+            pill(color: .green) {
+                Image(systemName: "checkmark.circle.fill")
+                Text("Done")
+            }
+            .help("Claude finished while you were away")
+        case .claudeReady where !compact:
+            pill(color: .secondary) { Text("Ready") }
+        default:
+            EmptyView()
+        }
+    }
+
+    private func pill<C: View>(color: Color, @ViewBuilder _ c: () -> C) -> some View {
+        HStack(spacing: 4) { c() }
+            .font(.caption2.weight(.semibold))
+            .foregroundStyle(color)
+            .padding(.horizontal, 6).padding(.vertical, 2)
+            .background(Capsule().fill(color.opacity(0.14)))
     }
 }

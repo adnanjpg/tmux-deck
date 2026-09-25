@@ -460,11 +460,7 @@ private struct TileHeader: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
-                if window.state == .claudeWorking {
-                    ProgressView().controlSize(.mini)
-                } else if window.state == .claudeNeedsYou {
-                    Circle().fill(.orange).frame(width: 7, height: 7)
-                }
+                StateBadge(state: window.state, done: server.unseenDone.contains(window.id))
             } else {
                 Text(tag == nil ? "Empty" : "Window closed").font(.callout).foregroundStyle(.secondary)
             }

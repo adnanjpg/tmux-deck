@@ -145,6 +145,8 @@ final class TmuxModel: ObservableObject, Identifiable {
     private(set) var needsYouCount = 0
     private var lastClaude: [String: (ClaudeSessionInfo, Date)] = [:]
     private var lastStatus: [String: ([String], Date)] = [:]
+    /// Claude windows that finished while you weren't looking at them ("Done" until opened).
+    @Published var unseenDone: Set<String> = []
     /// Why a sent message looks stuck, by pending message id (shown on the message).
     @Published var stuckReasons: [UUID: String] = [:]
     private var autoEnter: [UUID: (count: Int, last: Date)] = [:]
@@ -564,8 +566,11 @@ final class TmuxModel: ObservableObject, Identifiable {
             let isQuestion = w.state == .claudeNeedsYou
             finished = finished || isFinish
             asking = asking || isQuestion
-            // Banners only for chats you aren't looking at; the sound plays either way.
-            if appActive && w.id == selection { continue }
+            if w.state == .claudeWorking { unseenDone.remove(w.id) }
+            // Banners and "Done" only for chats you aren't looking at; the sound plays either way.
+            let onScreen = appActive && LayoutModel.shared.root.leaves.contains { $0.tag == "\(host)#\(w.id)" }
+            if onScreen { continue }
+            if isFinish { unseenDone.insert(w.id) }
             if isFinish {
                 notify("Claude finished", "\(w.session) › \(displayTitle(w)) is ready for you.")
             } else if isQuestion {
@@ -856,6 +861,7 @@ final class TmuxModel: ObservableObject, Identifiable {
 
     func userSelected(_ id: TmuxWindow.ID?) {
         lastUserSelection = Date()
+        if let id { unseenDone.remove(id) }
         selection = id   // TerminalPane reacts and tells tmux to switch.
     }
 

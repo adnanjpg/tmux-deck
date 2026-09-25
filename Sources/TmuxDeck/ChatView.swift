@@ -6,6 +6,10 @@ struct ChatView: View {
     @EnvironmentObject private var model: TmuxModel
     let window: TmuxWindow
     @ObservedObject var store: ChatStore
+    /// How many of the latest turns are rendered; older ones load on request.
+    @State private var visibleTurns = 25
+    /// Whether the bottom of the chat is on screen, so new messages keep it pinned there.
+    @State private var atBottom = true
 
     var body: some View {
         VStack(spacing: 0) {
@@ -13,7 +17,18 @@ struct ChatView: View {
             ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {
-                    ForEach(turns) { turn in
+                    let all = turns
+                    if all.count > visibleTurns {
+                        Button {
+                            visibleTurns += 25
+                        } label: {
+                            Label("Show earlier messages (\(all.count - visibleTurns) more turns)", systemImage: "arrow.up.circle")
+                        }
+                        .buttonStyle(.borderless)
+                        .frame(maxWidth: .infinity)
+                        .padding(.bottom, 8)
+                    }
+                    ForEach(all.suffix(visibleTurns)) { turn in
                         TurnView(turn: turn, store: store)
                     }
                     ForEach(Array(store.queued.enumerated()), id: \.offset) { _, text in
@@ -37,10 +52,23 @@ struct ChatView: View {
                 .padding(.vertical, 20)
                 .frame(maxWidth: .infinity)
                 Color.clear.frame(height: 1).id("bottom")
+                    .onAppear { atBottom = true }
+                    .onDisappear { atBottom = false }
             }
             .defaultScrollAnchor(.bottom)
-            .onAppear { DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { proxy.scrollTo("bottom", anchor: .bottom) } }
+            .onAppear {
+                // Lazy rows settle their heights over a few frames, so land on the bottom more than once.
+                for delay in [0.05, 0.25, 0.6, 1.2] {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + delay) { proxy.scrollTo("bottom", anchor: .bottom) }
+                }
+            }
             .onChange(of: store.loaded) { _, _ in proxy.scrollTo("bottom", anchor: .bottom) }
+            .onChange(of: store.items.count) { _, _ in
+                if atBottom { withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo("bottom", anchor: .bottom) } }
+            }
+            .onChange(of: store.sending.count) { _, n in
+                if n > 0 { withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo("bottom", anchor: .bottom) } }
+            }
             .overlay(alignment: .topTrailing) {
                 if store.refreshing && store.loaded {
                     HStack(spacing: 6) {
@@ -92,6 +120,7 @@ extension ChatView {
         let ids = turns.flatMap { $0.cardIDs }
         let allCollapsed = !ids.isEmpty && ids.allSatisfy(store.collapsed.contains)
         return HStack(spacing: 10) {
+            StateBadge(state: window.state, done: model.unseenDone.contains(window.id))
             Text("\(turns.count) \(turns.count == 1 ? "turn" : "turns")")
                 .font(.caption)
                 .foregroundStyle(.secondary)
