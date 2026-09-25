@@ -337,13 +337,13 @@ struct ContentView: View {
             windowContent(server: server, window: window, terminalAllowed: terminalOwner(for: tag) == leafID)
                 .environmentObject(server)
         } else if let tag, let hash = tag.firstIndex(of: "#"),
-                  let server = app.server(String(tag[..<hash])), !server.connected || server.sessions.isEmpty {
+                  let server = app.server(String(tag[..<hash])), !server.connected {
             ProgressView("Connecting to \(server.host)…").frame(maxWidth: .infinity, maxHeight: .infinity)
         } else if tag != nil {
             ContentUnavailableView {
                 Label("Window closed", systemImage: "xmark.rectangle")
             } description: {
-                Text("That window no longer exists.")
+                Text("That window no longer exists. Pick another from the sidebar.")
             } actions: {
                 if layout.isSplit { Button("Close tile") { layout.close(leafID) } }
             }
