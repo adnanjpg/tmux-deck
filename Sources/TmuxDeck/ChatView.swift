@@ -83,12 +83,9 @@ struct ChatView: View {
             }
             .animation(.easeOut(duration: 0.2), value: store.refreshing)
             .overlay {
-                if !store.loaded {
+                if !store.loaded && store.items.isEmpty {
                     ProgressView("Loading conversation…")
-                } else if store.missing {
-                    ContentUnavailableView("Conversation not found", systemImage: "questionmark.bubble",
-                                           description: Text("Use the Terminal button to see this window directly."))
-                } else if store.items.isEmpty {
+                } else if store.items.isEmpty && store.sending.isEmpty {
                     ContentUnavailableView("New conversation", systemImage: "sparkle",
                                            description: Text("Send Claude a message to get started."))
                 }

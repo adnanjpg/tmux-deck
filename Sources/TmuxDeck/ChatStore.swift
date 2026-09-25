@@ -147,7 +147,9 @@ final class ChatStore: ObservableObject {
             switch k {
             case "end":
                 offset = obj["off"] as? Int ?? offset
+                missing = false
             case "missing":
+                // A brand-new session has no log until its first message.
                 missing = true
             case "reset":
                 working = []; toolIndex = [:]; queue = []
