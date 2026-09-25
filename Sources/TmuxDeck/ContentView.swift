@@ -10,6 +10,7 @@ struct ContentView: View {
     @State private var newSessionPrompt = false
     @State private var movingToNewSession: TmuxWindow?
     @State private var addingServer = false
+    @State private var restoring: TmuxModel?
     @AppStorage("showPRs") private var showPRs = false
     /// Collapsed sidebar groups: "host" for a server, "host#session" for a session.
     @AppStorage("collapsedGroups") private var collapsedStore = ""
@@ -48,6 +49,7 @@ struct ContentView: View {
                 PRPanelHost().inspectorColumnWidth(min: 280, ideal: 340, max: 520)
             }
             .sheet(isPresented: $addingServer) { AddServerView(sheet: true) }
+            .sheet(item: $restoring) { server in RestoreView(server: server) }
     }
 
     private var main: some View {
@@ -125,6 +127,7 @@ struct ContentView: View {
                                  showName: app.servers.count > 1 || !server.connected,
                                  onNewSession: { target = server; renameText = ""; newSessionPrompt = true },
                                  onRemove: { app.removeServer(server.host) },
+                                 onRestore: { restoring = server },
                                  onCollapseSessions: { collapse in
                                      for sess in server.sessions { setExpanded("\(server.host)#\(sess.name)", !collapse) }
                                  })
@@ -139,9 +142,13 @@ struct ContentView: View {
         let tag = { (id: String) in "\(server.host)#\(id)" }
         if server.sessions.isEmpty {
             if server.connected {
-                Button("Create a session") { target = server; renameText = "main"; newSessionPrompt = true }
-                    .buttonStyle(.link)
-                    .selectionDisabled()
+                VStack(alignment: .leading, spacing: 6) {
+                    Button("Restore previous sessions…") { restoring = server }
+                        .buttonStyle(.link)
+                    Button("Create a session") { target = server; renameText = "main"; newSessionPrompt = true }
+                        .buttonStyle(.link)
+                }
+                .selectionDisabled()
             } else {
                 HStack(spacing: 6) {
                     ProgressView().controlSize(.small)
@@ -587,6 +594,7 @@ struct ServerHeader: View {
     let showName: Bool
     var onNewSession: () -> Void
     var onRemove: () -> Void
+    var onRestore: () -> Void = {}
     var onCollapseSessions: (Bool) -> Void = { _ in }
     @State private var showingPorts = false
     @State private var confirmRemove = false
@@ -609,6 +617,7 @@ struct ServerHeader: View {
             Spacer()
             Menu {
                 Button("New session…", action: onNewSession)
+                Button("Restore previous windows…", action: onRestore)
                 Button("Collapse all sessions") { withAnimation(.snappy) { onCollapseSessions(true) } }
                 Button("Expand all sessions") { withAnimation(.snappy) { onCollapseSessions(false) } }
                 do {
@@ -668,5 +677,79 @@ struct PortsView: View {
         }
         .padding(16)
         .frame(width: 340)
+    }
+}
+
+/// Pick which lost windows to bring back.
+struct RestoreView: View {
+    @ObservedObject var server: TmuxModel
+    @Environment(\.dismiss) private var dismiss
+    @State private var candidates: [TmuxModel.SavedWindow]?
+    @State private var chosen: Set<String> = []
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Restore windows on \(server.host)").font(.title3.weight(.semibold))
+            Text("Windows that existed before and aren't running now. Claude windows resume their conversation in their original folder; shells open in their folder.")
+                .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            if let candidates {
+                if candidates.isEmpty {
+                    ContentUnavailableView("Nothing to restore", systemImage: "checkmark.circle",
+                                           description: Text("Every window the app knows about is running."))
+                        .frame(minHeight: 160)
+                } else {
+                    List {
+                        ForEach(Dictionary(grouping: candidates, by: \.session).keys.sorted(), id: \.self) { session in
+                            Section("Session \(session)") {
+                                ForEach(candidates.filter { $0.session == session }) { c in
+                                    Toggle(isOn: Binding(get: { chosen.contains(c.id) },
+                                                         set: { if $0 { chosen.insert(c.id) } else { chosen.remove(c.id) } })) {
+                                        HStack(spacing: 8) {
+                                            Image(systemName: c.isClaude ? "sparkle" : "terminal").foregroundStyle(.secondary).frame(width: 16)
+                                            VStack(alignment: .leading, spacing: 1) {
+                                                Text(title(c)).lineLimit(1)
+                                                Text("\(c.isClaude ? "Claude conversation" : c.command) · \((c.path as NSString).lastPathComponent)")
+                                                    .font(.caption).foregroundStyle(.secondary)
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    .frame(minHeight: 240)
+                }
+            } else {
+                ProgressView("Looking for windows to restore…").frame(maxWidth: .infinity, minHeight: 160)
+            }
+            HStack {
+                if let candidates, !candidates.isEmpty {
+                    Button(chosen.count == candidates.count ? "Select none" : "Select all") {
+                        chosen = chosen.count == candidates.count ? [] : Set(candidates.map(\.id))
+                    }
+                }
+                Spacer()
+                Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
+                Button("Restore \(chosen.count) window\(chosen.count == 1 ? "" : "s")") {
+                    server.restore((candidates ?? []).filter { chosen.contains($0.id) })
+                    dismiss()
+                }
+                .keyboardShortcut(.defaultAction)
+                .disabled(chosen.isEmpty)
+            }
+        }
+        .padding(20)
+        .frame(width: 520)
+        .task {
+            let found = await server.restoreCandidates()
+            candidates = found
+            chosen = Set(found.map(\.id))
+        }
+    }
+
+    private func title(_ c: TmuxModel.SavedWindow) -> String {
+        if let id = c.claudeSessionID, let t = server.titles[id] { return t }
+        if c.isClaude { return "Claude · \(c.claudeSessionID!.prefix(8))" }
+        return c.name
     }
 }

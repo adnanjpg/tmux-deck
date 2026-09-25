@@ -323,7 +323,10 @@ final class TmuxModel: ObservableObject, Identifiable {
         prefetchChats(claudeIDs)
 
         let newSessions = order.map { TmuxSession(name: $0, windows: bySession[$0]!.sorted { $0.index < $1.index }) }
-        if newSessions != sessions { sessions = newSessions }
+        if newSessions != sessions {
+            sessions = newSessions
+            saveSnapshot()
+        }
 
         notifyStateChanges()
         followTmuxSelection(viewActive)
@@ -414,7 +417,7 @@ final class TmuxModel: ObservableObject, Identifiable {
     private var titleFetched: [String: Date] = [:]
 
     /// Reads the AI-generated title of each conversation, refreshing every minute.
-    private func fetchMissingTitles(_ ids: [String]) {
+    func fetchMissingTitles(_ ids: [String]) {
         let due = ids.filter { Date().timeIntervalSince(titleFetched[$0] ?? .distantPast) > 60 }
         guard !due.isEmpty else { return }
         for id in due { titleFetched[id] = Date() }
@@ -654,6 +657,103 @@ final class TmuxModel: ObservableObject, Identifiable {
             if let p = w.paneItems.first(where: { $0.id == id }) { return p }
         }
         return nil
+    }
+
+    // MARK: Restoring lost sessions
+
+    /// A window the app has seen on this server, kept so it can be recreated if
+    /// tmux loses it (a crash, a reboot, a killed server).
+    struct SavedWindow: Codable, Hashable, Identifiable {
+        var session: String
+        var order: Int
+        var name: String
+        var path: String
+        var command: String
+        var claudeSessionID: String?
+        var id: String { claudeSessionID ?? "\(session)|\(order)|\(path)" }
+        var isClaude: Bool { claudeSessionID != nil }
+    }
+
+    private var snapshotKey: String { "snapshot.\(host)" }
+
+    private func saveSnapshot() {
+        guard !sessions.isEmpty else { return }
+        let saved = sessions.flatMap { s in
+            s.windows.flatMap { w in w.paneItems.isEmpty ? [w] : w.paneItems }.map { w in
+                SavedWindow(session: w.session, order: w.index * 100 + w.paneIndex, name: w.name, path: w.path,
+                            command: w.command, claudeSessionID: w.claude?.sessionID)
+            }
+        }
+        if let data = try? JSONEncoder().encode(saved) { UserDefaults.standard.set(data, forKey: snapshotKey) }
+    }
+
+    /// Windows that existed before and don't now: from the app's own record, plus
+    /// the session files Claude Code leaves behind (they note the tmux session and folder).
+    func restoreCandidates() async -> [SavedWindow] {
+        var candidates: [SavedWindow] = []
+        if let data = UserDefaults.standard.data(forKey: snapshotKey),
+           let saved = try? JSONDecoder().decode([SavedWindow].self, from: data) {
+            candidates = saved
+        }
+        let script = #"""
+        import json, glob, os, time
+        for f in glob.glob(os.path.expanduser("~/.claude/sessions/*.json")):
+            try: d = json.load(open(f))
+            except Exception: continue
+            try:
+                os.kill(int(os.path.basename(f)[:-5]), 0); continue   # still running
+            except Exception: pass
+            if (d.get("updatedAt") or 0) / 1000 < time.time() - 7 * 86400: continue
+            print(json.dumps({"tmux": d.get("tmux") or "", "id": d.get("sessionId"), "cwd": d.get("cwd") or ""}))
+        """#
+        let result = await remote.run("python3 -", input: script)
+        for line in result.stdout.split(separator: "\n") {
+            guard let obj = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any],
+                  let id = obj["id"] as? String, let tmuxTarget = obj["tmux"] as? String,
+                  let colon = tmuxTarget.firstIndex(of: ":"),
+                  !candidates.contains(where: { $0.claudeSessionID == id }) else { continue }
+            let session = String(tmuxTarget[..<colon])
+            let windowNumber = Int(tmuxTarget[colon...].drop { !$0.isNumber }.prefix { $0.isNumber }) ?? 0
+            candidates.append(SavedWindow(session: session, order: 100_000 + windowNumber, name: "claude",
+                                          path: obj["cwd"] as? String ?? "~", command: "claude", claudeSessionID: id))
+        }
+        // Leave out what's already running.
+        let live = sessions.flatMap(\.windows).flatMap { [$0] + $0.paneItems }
+        let liveClaude = Set(live.compactMap(\.claude?.sessionID))
+        let liveSessions = Set(sessions.map(\.name))
+        let missing = candidates.filter { c in
+            c.isClaude ? !liveClaude.contains(c.claudeSessionID!) : !liveSessions.contains(c.session)
+        }
+        fetchMissingTitles(missing.compactMap(\.claudeSessionID))
+        return missing.sorted { ($0.session, $0.order) < ($1.session, $1.order) }
+    }
+
+    /// Recreates windows: each in its folder, in its tmux session (created if needed).
+    /// Claude windows resume their conversation; shells just open in the folder.
+    func restore(_ windows: [SavedWindow]) {
+        var script = ""
+        var seen: [String] = []
+        for w in windows {
+            let s = sq(w.session), dir = sq(w.path)
+            if !seen.contains(w.session) {
+                seen.append(w.session)
+                script += """
+                if tmux has-session -t \(sq("=" + w.session)) 2>/dev/null; then id=$(tmux new-window -d -P -F '#{window_id}' -t \(sq(w.session + ":")) -c \(dir)); \
+                else tmux new-session -d -s \(s) -c \(dir) && id=$(tmux list-windows -t \(sq("=" + w.session)) -F '#{window_id}' | head -1); fi
+
+                """
+            } else {
+                script += "id=$(tmux new-window -d -P -F '#{window_id}' -t \(sq(w.session + ":")) -c \(dir))\n"
+            }
+            if let cid = w.claudeSessionID {
+                script += "tmux send-keys -t \"$id\" \(sq("claude --resume " + cid)) Enter\n"
+            }
+        }
+        Task {
+            let result = await remote.run(script, timeout: 60)
+            flash(result.ok ? "Restored \(windows.count) window\(windows.count == 1 ? "" : "s")" : "Restore failed: \(result.stderr.prefix(120))")
+            await refresh()
+        }
     }
 
     func window(containing pane: TmuxWindow) -> TmuxWindow? {
