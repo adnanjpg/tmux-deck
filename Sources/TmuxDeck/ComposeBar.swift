@@ -359,8 +359,8 @@ final class ComposeNSTextView: NSTextView {
             break
         }
         if empty && flags.subtracting([.numericPad, .function]).isEmpty {
-            let map: [UInt16: String] = [126: "Up", 125: "Down", 123: "Left", 124: "Right",
-                                         48: "Tab", 51: "BSpace", 116: "PPage", 121: "NPage"]
+            // ← and → aren't forwarded: in Claude, ← opens the agent list, which then takes Enter.
+            let map: [UInt16: String] = [126: "Up", 125: "Down", 48: "Tab", 51: "BSpace", 116: "PPage", 121: "NPage"]
             if let key = map[event.keyCode] { onForward?([key]); return }
         }
         super.keyDown(with: event)

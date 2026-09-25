@@ -20,7 +20,7 @@ struct ChatView: View {
                         QueuedMessage(text: text)
                     }
                     ForEach(store.sending) { pending in
-                        SendingMessage(message: pending)
+                        SendingMessage(message: pending, window: window, store: store)
                     }
                     if let activity = model.activities[window.id] {
                         ActivityView(activity: activity, working: window.state == .claudeWorking)
@@ -296,12 +296,17 @@ struct MessageCard<Content: View>: View {
 }
 
 /// Your message the moment you send it, greyed out until Claude's log confirms it.
+/// If it gets stuck, it says why and offers a fix.
 struct SendingMessage: View {
+    @EnvironmentObject private var model: TmuxModel
     let message: PendingMessage
+    let window: TmuxWindow
+    @ObservedObject var store: ChatStore
 
     var body: some View {
-        TimelineView(.periodic(from: .now, by: 5)) { context in
-            let slow = context.date.timeIntervalSince(message.sentAt) > 30
+        TimelineView(.periodic(from: .now, by: 3)) { context in
+            let reason = model.stuckReasons[message.id]
+            let slow = context.date.timeIntervalSince(message.sentAt) > 25
             VStack(alignment: .leading, spacing: 8) {
                 HStack(spacing: 8) {
                     ZStack {
@@ -311,10 +316,7 @@ struct SendingMessage: View {
                     .frame(width: 22, height: 22)
                     Text("You").fontWeight(.semibold).foregroundStyle(.secondary)
                     Spacer()
-                    if slow {
-                        Label("Not confirmed yet — check the terminal view", systemImage: "exclamationmark.triangle")
-                            .font(.caption).foregroundStyle(.orange)
-                    } else {
+                    if reason == nil && !slow {
                         HStack(spacing: 4) {
                             ProgressView().controlSize(.mini)
                             Text("Sending").font(.caption)
@@ -329,9 +331,32 @@ struct SendingMessage: View {
                     }
                 }
                 .padding(.leading, 30)
+                if reason != nil || slow {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Label(reason ?? "Claude hasn't picked this up yet.", systemImage: "exclamationmark.triangle.fill")
+                            .font(.callout)
+                            .foregroundStyle(.orange)
+                            .fixedSize(horizontal: false, vertical: true)
+                        HStack(spacing: 8) {
+                            Button("Press Enter") { model.send(keys: ["Enter"], to: window) }
+                                .help("Submit whatever is in Claude's input box")
+                            Button("Open terminal") { model.showTerminal(for: window) }
+                                .help("See exactly what Claude's screen shows")
+                            Button("Dismiss") { store.dismissSending(message.id) }
+                                .help("Remove this from the chat (doesn't unsend anything)")
+                        }
+                        .controlSize(.small)
+                    }
+                    .padding(.leading, 30)
+                }
             }
             .padding(12)
             .background(RoundedRectangle(cornerRadius: 12).fill(Color.secondary.opacity(0.07)))
+            .overlay {
+                if reason != nil {
+                    RoundedRectangle(cornerRadius: 12).strokeBorder(Color.orange.opacity(0.5))
+                }
+            }
             .padding(.vertical, 14)
         }
         .transition(.opacity)

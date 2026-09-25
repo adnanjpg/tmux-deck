@@ -117,6 +117,10 @@ final class ChatStore: ObservableObject {
         sending.append(PendingMessage(text: text, images: images))
     }
 
+    func dismissSending(_ id: UUID) {
+        sending.removeAll { $0.id == id }
+    }
+
     /// Fetches what's new since you last looked, showing the small refresh spinner.
     func catchUp() async {
         refreshing = true

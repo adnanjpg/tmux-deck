@@ -144,6 +144,9 @@ final class TmuxModel: ObservableObject, Identifiable {
 
     private(set) var needsYouCount = 0
     private var lastClaude: [String: (ClaudeSessionInfo, Date)] = [:]
+    /// Why a sent message looks stuck, by pending message id (shown on the message).
+    @Published var stuckReasons: [UUID: String] = [:]
+    private var autoEnter: [UUID: (count: Int, last: Date)] = [:]
     private var terminals: [String: TerminalController] = [:]
     private var chatStores: [String: ChatStore] = [:]
     private var prefetched = Set<String>()
@@ -317,6 +320,7 @@ final class TmuxModel: ObservableObject, Identifiable {
         if options != promptOptions { promptOptions = options }
         if newSuggestions != suggestions { suggestions = newSuggestions }
         if newActivities != activities { activities = newActivities }
+        recoverStuckMessages(allItems, captures: captures)
         if newStatusLines != statusLines { statusLines = newStatusLines }
         let claudeIDs = allItems.compactMap(\.claude?.sessionID)
         fetchMissingTitles(claudeIDs)
@@ -349,6 +353,74 @@ final class TmuxModel: ObservableObject, Identifiable {
             return ["busy", "running", "working", "compacting"].contains(status) ? .claudeWorking : .claudeReady
         }
         return text.contains("esc to interrupt") ? .claudeWorking : .claudeReady
+    }
+
+    /// If a message you sent is still sitting in Claude's input box, press Enter again
+    /// (up to 3 times, 4 seconds apart). If Claude's agent list has focus, Enter would
+    /// go there instead, so say so rather than pressing it.
+    private func recoverStuckMessages(_ items: [TmuxWindow], captures: [String: [String]]) {
+        var reasons: [UUID: String] = [:]
+        for w in items where w.state.isClaude {
+            guard let sid = w.claude?.sessionID, let store = chatStores[sid], !store.sending.isEmpty else { continue }
+            let raw = captures[w.paneID] ?? []
+            let typed = Self.typedInput(raw)
+            let agentList = Self.agentListOpen(raw)
+            for p in store.sending where Date().timeIntervalSince(p.sentAt) > 6 {
+                guard Self.input(typed, holds: p.text) else { continue }
+                if agentList {
+                    reasons[p.id] = "Claude's agent list has focus, so Enter can't reach your message. Open the terminal view and press Esc, then Enter."
+                    continue
+                }
+                let a = autoEnter[p.id] ?? (0, .distantPast)
+                if a.count < 3 {
+                    if Date().timeIntervalSince(a.last) > 4 {
+                        autoEnter[p.id] = (a.count + 1, Date())
+                        Task { _ = await remote.run("tmux send-keys -t \(sq(w.paneID)) Enter") }
+                    }
+                } else {
+                    reasons[p.id] = "Your message is still in Claude's input box."
+                }
+            }
+        }
+        if reasons != stuckReasons { stuckReasons = reasons }
+    }
+
+    static func input(_ typed: String, holds sent: String) -> Bool {
+        func norm(_ s: String) -> String { s.split(whereSeparator: \.isWhitespace).joined(separator: " ") }
+        let needle = String(norm(sent).prefix(20))
+        let hay = norm(typed)
+        return !needle.isEmpty && (hay.contains(needle) || hay.contains("[Pasted text"))
+    }
+
+    /// What's typed (not Claude's dim suggestion) in Claude's input box.
+    static func typedInput(_ rawLines: [String]) -> String {
+        guard let line = rawLines.last(where: { stripANSI($0).trimmingCharacters(in: .whitespaces).hasPrefix("❯") }),
+              let prompt = line.range(of: "❯") else { return "" }
+        var dim = false, text = ""
+        var i = prompt.upperBound
+        while i < line.endIndex {
+            if line[i] == "\u{1b}", let end = line[i...].firstIndex(where: { $0.isLetter }) {
+                if line[end] == "m" {
+                    let params = line[line.index(after: i)..<end].dropFirst().split(separator: ";").map(String.init)
+                    if params.isEmpty || params.contains("0") || params.contains("22") { dim = false }
+                    if params.contains("2") { dim = true }
+                }
+                i = line.index(after: end)
+                continue
+            }
+            if !dim { text.append(line[i]) }
+            i = line.index(after: i)
+        }
+        return text.replacingOccurrences(of: "\u{a0}", with: " ").trimmingCharacters(in: .whitespaces)
+    }
+
+    /// Claude shows its agent list ("● main", "◯ general-purpose …") under the status line when it has focus.
+    static func agentListOpen(_ rawLines: [String]) -> Bool {
+        (footer(rawLines) ?? []).contains { $0.range(of: #"^\s*[●◯]\s"#, options: .regularExpression) != nil }
+    }
+
+    func showTerminal(for w: TmuxWindow) {
+        rawTerminal.insert(w.id)
     }
 
     /// The lines below Claude's input box: its status line, mode line and hints.
@@ -898,30 +970,39 @@ final class TmuxModel: ObservableObject, Identifiable {
             }
             return
         }
-        let script: String
+        // The message is uploaded first, then pasted and submitted by a background job on
+        // the server (setsid nohup), so a dropped connection can't leave it half-sent.
+        let inner: String
         if w.state.isClaude {
             // Claude Code can swallow an Enter that arrives while it's still taking in a
             // paste, and for /commands the first Enter only picks the autocomplete entry.
             // So: wait until the text shows in Claude's input line, press Enter, and keep
-            // pressing (up to 3 times) until the input line no longer holds it.
+            // pressing (up to 4 times) until the input line no longer holds it.
             // Claude's prompt is "❯" plus a no-break space, normalised here with sed.
-            script = """
-            \(imagePaste)f=$(mktemp) && cat > "$f" && tmux load-buffer -b deck-compose "$f" && tmux paste-buffer -p -d -b deck-compose -t \(t) || exit 1
+            inner = """
+            f="$1"
+            \(imagePaste)tmux load-buffer -b deck-compose "$f" && tmux paste-buffer -p -d -b deck-compose -t \(t) || exit 1
             first=$(head -n1 "$f" | sed 's/^[[:space:]]*//' | cut -c1-20)
             inbox() { tmux capture-pane -p -t \(t) | sed 's/\\xc2\\xa0/ /g' | grep '^❯' | tail -1 | cut -c4-; }
             waiting() { l=$(inbox); case "$l" in *"$first"*|*"[Pasted text"*) return 0;; *) return 1;; esac; }
             for i in 1 2 3 4 5 6 7 8 9 10; do waiting && break; sleep 0.2; done
-            sleep 0.25
-            for i in 1 2 3; do tmux send-keys -t \(t) Enter; sleep 0.9; waiting || break; done
-            rm -f "$f"
+            sleep 0.3
+            for i in 1 2 3 4; do tmux send-keys -t \(t) Enter; sleep 1; waiting || break; done
+            rm -f "$f" "$0"
             """
         } else {
-            script = """
-            \(imagePaste)f=$(mktemp) && cat > "$f" && tmux load-buffer -b deck-compose "$f" && tmux paste-buffer -p -d -b deck-compose -t \(t) \
-              && sleep 0.2 && tmux send-keys -t \(t) Enter
-            rm -f "$f"
+            inner = """
+            f="$1"
+            \(imagePaste)tmux load-buffer -b deck-compose "$f" && tmux paste-buffer -p -d -b deck-compose -t \(t) && sleep 0.2 && tmux send-keys -t \(t) Enter
+            rm -f "$f" "$0"
             """
         }
+        let script = """
+        f=$(mktemp) && cat > "$f" && s=$(mktemp) && cat > "$s" <<'DECK_SEND_EOF'
+        \(inner)
+        DECK_SEND_EOF
+        setsid nohup bash "$s" "$f" >/dev/null 2>&1 </dev/null &
+        """
         Task {
             let result = await remote.run(script, input: text)
             if !result.ok { flash("Couldn't send that. Check the connection.") }
