@@ -5,7 +5,7 @@ A native macOS app for working with tmux sessions on a remote machine over SSH, 
 tmux stays the backend. Your sessions keep running on the server when the app closes, your Wi-Fi drops, or your laptop sleeps. The app gives you a regular Mac interface on top:
 
 - **Sidebar of sessions, windows and panes.** Click to switch. Claude windows are named after their conversation title, not "claude" over and over.
-- **Claude windows as a chat.** Your messages, Claude's formatted replies, and each tool call as a row you click to expand. Text selects and copies like any Mac app. Conversations are cached on disk, so switching is instant.
+- **Claude windows as a chat.** Your messages, Claude's formatted replies, and each tool call as a row you click to expand. Slash commands (like `/rename`) and `!` shell commands show with their output, along with background task notices, compaction, errors and Claude's "while you were away" recaps. Text selects and copies like any Mac app. Conversations are cached on disk, so switching is instant.
 - **A real Mac input box.** ⌘A, ⌥⌫, ⌘⌫, ⌥←/→, ⌘Z and mouse selection all work. Enter sends, Shift+Enter adds a new line. Claude's suggested next message shows faded; Tab takes it.
 - **Buttons for Claude's permission questions**, a Stop button, and status in the sidebar (working, needs your answer, ready).
 - **Claude's live progress:** its status line ("Computing… 18s · ↓ 547 tokens"), to-do list and thinking.

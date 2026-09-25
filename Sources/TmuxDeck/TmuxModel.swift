@@ -422,7 +422,7 @@ final class TmuxModel: ObservableObject, Identifiable {
         guard !due.isEmpty else { return }
         for id in due { titleFetched[id] = Date() }
         let script = due.map { id in
-            "f=$(ls ~/.claude/projects/*/\(id).jsonl 2>/dev/null | head -1); [ -n \"$f\" ] && printf '%s\\t' \(id) && grep -a '\"type\":\"ai-title\"' \"$f\" | tail -1"
+            "f=$(ls ~/.claude/projects/*/\(id).jsonl 2>/dev/null | head -1); [ -n \"$f\" ] && printf '%s\\t' \(id) && { grep -a '\"type\":\"custom-title\"' \"$f\" | tail -1; grep -a '\"type\":\"ai-title\"' \"$f\" | tail -1; } | head -1"
         }.joined(separator: "; ")
         Task {
             let result = await remote.run(script)
@@ -430,7 +430,7 @@ final class TmuxModel: ObservableObject, Identifiable {
                 let parts = line.split(separator: "\t", maxSplits: 1)
                 guard parts.count == 2,
                       let obj = try? JSONSerialization.jsonObject(with: Data(parts[1].utf8)) as? [String: Any],
-                      let title = obj["aiTitle"] as? String else { continue }
+                      let title = (obj["customTitle"] ?? obj["aiTitle"]) as? String else { continue }
                 titles[String(parts[0])] = title
             }
         }

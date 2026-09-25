@@ -8,6 +8,8 @@ struct ChatItem: Identifiable, Equatable, Codable {
         case tool(name: String, summary: String, added: Int, removed: Int)
         case note(String)
         case thinking(String)
+        case command(String)   // a /command or ! shell command you ran; its output goes in `result`
+        case recap(String)     // Claude's "while you were away" summary
     }
     var id: String
     var kind: Kind
@@ -88,7 +90,7 @@ final class ChatStore: ObservableObject {
 
     private var cacheURL: URL {
         let dir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("TmuxDeck/chats-v6", isDirectory: true)
+            .appendingPathComponent("TmuxDeck/chats-v7", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir.appendingPathComponent("\(sessionID).json")
     }
@@ -153,6 +155,20 @@ final class ChatStore: ObservableObject {
             case "text": fresh.append(ChatItem(id: id, kind: .assistant(text)))
             case "note": fresh.append(ChatItem(id: id, kind: .note(text)))
             case "thinking": fresh.append(ChatItem(id: id, kind: .thinking(text)))
+            case "cmd": fresh.append(ChatItem(id: id, kind: .command(text)))
+            case "recap": fresh.append(ChatItem(id: id, kind: .recap(text)))
+            case "cmdout":
+                // Output belongs to the latest command that doesn't have any yet.
+                func isOpenCommand(_ item: ChatItem) -> Bool {
+                    if case .command = item.kind { return item.result == nil } else { return false }
+                }
+                if let i = fresh.lastIndex(where: isOpenCommand) {
+                    fresh[i].result = text
+                } else if let i = working.lastIndex(where: isOpenCommand), i >= working.count - 5 {
+                    working[i].result = text
+                } else {
+                    fresh.append(ChatItem(id: id, kind: .note(text)))
+                }
             case "tool":
                 fresh.append(ChatItem(id: id, kind: .tool(name: obj["name"] as? String ?? "Tool",
                                                           summary: obj["s"] as? String ?? "",
@@ -169,6 +185,8 @@ final class ChatStore: ObservableObject {
             default: break
             }
         }
+        var known = Set(working.map(\.id))
+        fresh = fresh.filter { known.insert($0.id).inserted }
         working.append(contentsOf: fresh)
         if working.count > Self.maxItems { working.removeFirst(working.count - Self.maxItems) }
         if working != items {
@@ -178,9 +196,12 @@ final class ChatStore: ObservableObject {
         if queue != queued { queued = queue }
         // A sent message is confirmed once it appears as a message or in Claude's queue.
         if !sending.isEmpty {
-            let freshUsers = fresh.filter { if case .user = $0.kind { return true } else { return false } }
+            let freshUsers = fresh.filter(\.startsTurn)
             let logged = freshUsers.compactMap { item -> String? in
-                if case .user(let t) = item.kind { return t } else { return nil }
+                switch item.kind {
+                case .user(let t), .command(let t): return t
+                default: return nil
+                }
             } + enqueued + queue
             let imagesArrived = freshUsers.contains { ($0.images ?? 0) > 0 }
             let remaining = sending.filter { p in
@@ -242,15 +263,40 @@ def result_text(c):
 HIDDEN = ("<command-", "<local-command", "<system-reminder", "Caveat:", "<bash-", "<user-memory", "<task-notification")
 import re
 PASTE_TAG = re.compile(r"</?pasted_content[^>]*>")
+def tag(name, s):
+    m = re.search(r"<%s>(.*?)</%s>" % (name, name), s, re.S)
+    return m.group(1) if m else None
+
 def clean(text):
     # Claude Code wraps pasted text in <pasted_content id="…"> tags; show just the text.
     return PASTE_TAG.sub("", text).strip()
 for raw in data[:end].splitlines():
     try: d = json.loads(raw)
     except Exception: continue
-    if d.get("isSidechain") or d.get("isMeta"): continue
+    if d.get("isSidechain"): continue
     t = d.get("type")
     uid = d.get("uuid", "")
+    if t == "continued-in":
+        emit(k="note", id="cont-" + str(d.get("continuedInSessionId")), t="This conversation continues in another session")
+        continue
+    if t == "system":
+        st, c = d.get("subtype"), d.get("content") or ""
+        if st == "local_command" and ("<command-name>" in c or "<command-message>" in c):
+            name = (tag("command-name", c) or tag("command-message", c) or "").strip()
+            args = (tag("command-args", c) or "").strip()
+            if not name.startswith("/"): name = "/" + name
+            emit(k="cmd", id=uid, t=(name + (" " + args if args else "")).strip())
+        elif st == "local_command":
+            printed = tag("local-command-stdout", c) or tag("local-command-stderr", c)
+            if printed and printed.strip(): emit(k="cmdout", t=cut(printed.strip(), 4000))
+        elif st == "compact_boundary":
+            emit(k="note", id=uid, t="Conversation compacted to free up context")
+        elif st == "away_summary" and c.strip():
+            emit(k="recap", id=uid, t=cut(c.strip(), 4000))
+        elif d.get("level") in ("error", "warning") and c.strip():
+            emit(k="note", id=uid, t=cut(clean(c.strip()), 600))
+        continue
+    meta = d.get("isMeta")
     msg = d.get("message") or {}
     content = msg.get("content")
     if t == "attachment":
@@ -281,9 +327,23 @@ for raw in data[:end].splitlines():
                 emit(k="result", **{"for": part.get("tool_use_id", "")}, t=cut(result_text(part.get("content")), 4000), err=bool(part.get("is_error")))
             elif part.get("type") == "text":
                 text = part.get("text", "").strip()
-                if text.startswith("<bash-input>"):
-                    texts.append("! " + text.replace("<bash-input>", "").replace("</bash-input>", "").strip())
-                elif not text or text.startswith(HIDDEN):
+                if text.startswith(("<command-name>", "<command-message>")):
+                    name = (tag("command-name", text) or tag("command-message", text) or "").strip()
+                    args = (tag("command-args", text) or "").strip()
+                    if not name.startswith("/"): name = "/" + name
+                    emit(k="cmd", id=f"{uid}-{i}", t=(name + (" " + args if args else "")).strip())
+                elif text.startswith(("<local-command-stdout>", "<local-command-stderr>")):
+                    printed = (tag("local-command-stdout", text) or "") + (tag("local-command-stderr", text) or "")
+                    if printed.strip(): emit(k="cmdout", t=cut(printed.strip(), 4000))
+                elif text.startswith("<bash-input>"):
+                    emit(k="cmd", id=f"{uid}-{i}", t="! " + (tag("bash-input", text) or "").strip())
+                elif text.startswith(("<bash-stdout>", "<bash-stderr>")):
+                    printed = (tag("bash-stdout", text) or "") + (tag("bash-stderr", text) or "")
+                    emit(k="cmdout", t=cut(printed.strip() or "(no output)", 4000))
+                elif text.startswith("<task-notification>"):
+                    summ = tag("summary", text) or tag("status", text) or "update"
+                    emit(k="note", id=f"{uid}-{i}", t="Background task: " + clean(summ).strip())
+                elif meta or not text or text.startswith(HIDDEN):
                     continue
                 elif text.startswith("[Request interrupted"):
                     emit(k="note", id=f"{uid}-{i}", t="You stopped Claude")
@@ -291,7 +351,7 @@ for raw in data[:end].splitlines():
                     emit(k="note", id=f"{uid}-{i}", t="Earlier conversation was compacted to free up context")
                 else:
                     texts.append(clean(text))
-            elif part.get("type") == "image":
+            elif part.get("type") == "image" and not meta:
                 images += 1
         if texts or images:
             emit(k="user", id=uid, t=cut("\n\n".join(texts), 20000), img=images)

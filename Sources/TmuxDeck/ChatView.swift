@@ -131,7 +131,7 @@ struct Turn: Identifiable {
     static func group(_ items: [ChatItem]) -> [Turn] {
         var turns: [Turn] = []
         for item in items {
-            if case .user = item.kind {
+            if item.startsTurn {
                 turns.append(Turn(user: item))
             } else if turns.isEmpty {
                 turns.append(Turn(user: nil, replies: [item]))
@@ -165,12 +165,40 @@ struct Turn: Identifiable {
     }
 }
 
+extension ChatItem {
+    /// Your messages and the commands you run each start a new turn.
+    var startsTurn: Bool {
+        switch kind {
+        case .user, .command: true
+        default: false
+        }
+    }
+}
+
 struct TurnView: View {
     let turn: Turn
     @ObservedObject var store: ChatStore
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
+            if let user = turn.user, case .command(let cmd) = user.kind {
+                MessageCard(role: .you, collapsed: binding(user.id), summary: cmd, detail: "command") {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Label(cmd, systemImage: cmd.hasPrefix("!") ? "terminal" : "command")
+                            .font(.system(.body, design: .monospaced))
+                            .textSelection(.enabled)
+                        if let out = user.result, !out.isEmpty {
+                            Text(out)
+                                .font(.system(.callout, design: .monospaced))
+                                .foregroundStyle(.secondary)
+                                .textSelection(.enabled)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(10)
+                                .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
+                        }
+                    }
+                }
+            }
             if let user = turn.user, case .user(let text) = user.kind {
                 MessageCard(role: .you, collapsed: binding(user.id),
                             summary: text.split(separator: "\n").first.map(String.init) ?? text,
@@ -362,6 +390,18 @@ struct ChatRow: View {
                     result: item.result, isError: item.isError)
         case .thinking(let text):
             ThinkingRow(text: text)
+        case .command(let cmd):
+            Label(cmd, systemImage: "command").font(.system(.callout, design: .monospaced)).foregroundStyle(.secondary)
+        case .recap(let text):
+            VStack(alignment: .leading, spacing: 6) {
+                Label("While you were away", systemImage: "clock.arrow.circlepath")
+                    .font(.callout.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                MarkdownText(text)
+            }
+            .padding(12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color.accentColor.opacity(0.07), in: RoundedRectangle(cornerRadius: 10))
         case .note(let text):
             Text(text)
                 .font(.caption)
