@@ -616,6 +616,53 @@ struct ToolRow: View {
     }
 }
 
+/// A Markdown table: bold header, aligned columns, zebra rows, inline formatting in cells.
+struct TableView: View {
+    let header: [String]
+    let alignments: [MarkdownText.TableAlignment]
+    let rows: [[String]]
+
+    var body: some View {
+        let columns = max(header.count, rows.map(\.count).max() ?? 0)
+        ScrollView(.horizontal, showsIndicators: true) {
+            Grid(alignment: .leading, horizontalSpacing: 0, verticalSpacing: 0) {
+                GridRow {
+                    ForEach(0..<columns, id: \.self) { c in
+                        cell(c < header.count ? header[c] : "", column: c, bold: true)
+                    }
+                }
+                .background(Color.secondary.opacity(0.12))
+                ForEach(Array(rows.enumerated()), id: \.offset) { r, row in
+                    Divider().gridCellUnsizedAxes(.horizontal)
+                    GridRow {
+                        ForEach(0..<columns, id: \.self) { c in
+                            cell(c < row.count ? row[c] : "", column: c, bold: false)
+                        }
+                    }
+                    .background(r % 2 == 1 ? Color.secondary.opacity(0.04) : Color.clear)
+                }
+            }
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+            .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Color(nsColor: .separatorColor)))
+            .padding(.bottom, 2)
+        }
+    }
+
+    private func cell(_ text: String, column: Int, bold: Bool) -> some View {
+        let align = column < alignments.count ? alignments[column] : .leading
+        let frameAlign: Alignment = align == .center ? .center : align == .trailing ? .trailing : .leading
+        return Text(MarkdownText.inline(text.replacingOccurrences(of: "<br>", with: "\n")))
+            .fontWeight(bold ? .semibold : .regular)
+            .multilineTextAlignment(align == .center ? .center : align == .trailing ? .trailing : .leading)
+            .textSelection(.enabled)
+            .frame(minWidth: 60, maxWidth: 420, alignment: frameAlign)
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .gridColumnAlignment(align == .center ? .center : align == .trailing ? .trailing : .leading)
+    }
+}
+
 /// Renders Claude's Markdown: paragraphs with inline formatting, headings,
 /// and code blocks. Each block is selectable like normal text.
 struct MarkdownText: View {
@@ -625,6 +672,28 @@ struct MarkdownText: View {
         case text(String)
         case heading(String, Int)
         case code(String)
+        case table(header: [String], alignments: [TableAlignment], rows: [[String]])
+    }
+
+    enum TableAlignment: Hashable { case leading, center, trailing }
+
+    private static let separatorPattern = try! Regex(#"^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$"#)
+
+    /// "| a | b |" → ["a", "b"]; pipes inside `code` or escaped as \| are kept.
+    static func cells(_ line: String) -> [String] {
+        var t = line.trimmingCharacters(in: .whitespaces)
+        if t.hasPrefix("|") { t.removeFirst() }
+        if t.hasSuffix("|") && !t.hasSuffix("\\|") { t.removeLast() }
+        var cells: [String] = [], current = "", inCode = false
+        var chars = Array(t)[...]
+        while let c = chars.popFirst() {
+            if c == "\\", chars.first == "|" { current.append("|"); chars.removeFirst(); continue }
+            if c == "`" { inCode.toggle() }
+            if c == "|" && !inCode { cells.append(current.trimmingCharacters(in: .whitespaces)); current = ""; continue }
+            current.append(c)
+        }
+        cells.append(current.trimmingCharacters(in: .whitespaces))
+        return cells
     }
 
     init(_ source: String) {
@@ -636,7 +705,11 @@ struct MarkdownText: View {
             if !text.isEmpty { blocks.append(.text(text)) }
             paragraph = []
         }
-        for line in source.components(separatedBy: "\n") {
+        let lines = source.components(separatedBy: "\n")
+        var i = 0
+        while i < lines.count {
+            let line = lines[i]
+            defer { i += 1 }
             if line.trimmingCharacters(in: .whitespaces).hasPrefix("```") {
                 if let c = code { blocks.append(.code(c.joined(separator: "\n"))); code = nil }
                 else { flush(); code = [] }
@@ -644,6 +717,24 @@ struct MarkdownText: View {
             }
             if code != nil { code!.append(line); continue }
             if line.trimmingCharacters(in: .whitespaces).isEmpty { flush(); continue }
+            // A table: a row of cells, then a |---|:---:| separator, then rows.
+            if line.contains("|"), i + 1 < lines.count, lines[i + 1].wholeMatch(of: Self.separatorPattern) != nil {
+                flush()
+                let header = Self.cells(line)
+                let alignments = Self.cells(lines[i + 1]).map { spec -> TableAlignment in
+                    let left = spec.hasPrefix(":"), right = spec.hasSuffix(":")
+                    return left && right ? .center : right ? .trailing : .leading
+                }
+                var rows: [[String]] = []
+                var j = i + 2
+                while j < lines.count, lines[j].contains("|"), !lines[j].trimmingCharacters(in: .whitespaces).isEmpty {
+                    rows.append(Self.cells(lines[j]))
+                    j += 1
+                }
+                blocks.append(.table(header: header, alignments: alignments, rows: rows))
+                i = j - 1
+                continue
+            }
             if let m = line.firstMatch(of: try! Regex(#"^(#{1,4})\s+(.*)$"#)),
                let hashes = m[1].substring, let title = m[2].substring {
                 flush(); blocks.append(.heading(String(title), hashes.count)); continue
@@ -659,6 +750,8 @@ struct MarkdownText: View {
         VStack(alignment: .leading, spacing: 10) {
             ForEach(Array(blocks.enumerated()), id: \.offset) { _, block in
                 switch block {
+                case .table(let header, let alignments, let rows):
+                    TableView(header: header, alignments: alignments, rows: rows)
                 case .text(let s):
                     let prs = Self.prURLs(in: s)
                     // A paragraph that is only PR links becomes chips; otherwise chips go under it.
