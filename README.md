@@ -54,6 +54,7 @@ To update, `git pull` and run `./build-app.sh` again.
 | Show as raw terminal | ⌥⌘T |
 | Pull requests panel | ⇧⌘P |
 | Close other tiles | ⇧⌘U |
+| Full screen | ⌃⌘F |
 | Previous / next window | ⌘[ / ⌘] |
 | Go to window 1–9 | ⌘1 … ⌘9 |
 

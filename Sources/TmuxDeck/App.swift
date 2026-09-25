@@ -25,6 +25,10 @@ struct TmuxDeckApp: App {
                 Button("New terminal window") { model?.newWindow(claude: false) }
                     .keyboardShortcut("t")
             }
+            CommandGroup(after: .sidebar) {
+                Button("Toggle Full Screen") { AppDelegate.toggleFullScreen() }
+                    .keyboardShortcut("f", modifiers: [.command, .control])
+            }
             CommandMenu("Tmux") {
                 Button("Split right") { model?.split(vertical: false) }
                     .keyboardShortcut("d")
@@ -74,6 +78,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
+        // Make sure the main window can go full screen (green button, ⌃⌘F).
+        NotificationCenter.default.addObserver(forName: NSWindow.didBecomeKeyNotification, object: nil, queue: .main) { note in
+            (note.object as? NSWindow)?.collectionBehavior.insert(.fullScreenPrimary)
+        }
+    }
+
+    @MainActor static func toggleFullScreen() {
+        let window = NSApp.keyWindow ?? NSApp.mainWindow ?? NSApp.windows.first { $0.isVisible && $0.canBecomeMain }
+        window?.collectionBehavior.insert(.fullScreenPrimary)
+        window?.toggleFullScreen(nil)
     }
 
     func applicationWillTerminate(_ notification: Notification) {
