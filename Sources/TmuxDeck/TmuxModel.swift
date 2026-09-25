@@ -129,6 +129,8 @@ final class TmuxModel: ObservableObject, Identifiable {
     @Published var toast: String?
     /// Choices Claude is currently offering in each window, e.g. ["1": "Yes", "2": "No"].
     @Published var promptOptions: [String: [PromptOption]] = [:]
+    /// The question text above those choices (e.g. "Do you want to make this edit to X?").
+    @Published var promptQuestions: [String: String] = [:]
     /// Claude's own suggestion for the next message (the dim text in its input line).
     @Published var suggestions: [String: String] = [:]
     /// The lines under Claude's input box (its status line, mode, hints) per item.
@@ -306,6 +308,7 @@ final class TmuxModel: ObservableObject, Identifiable {
         }
 
         var options: [String: [PromptOption]] = [:]
+        var questions: [String: String] = [:]
         var newSuggestions: [String: String] = [:]
         var newActivities: [String: ClaudeActivity] = [:]
         var newStatusLines: [String: [String]] = [:]
@@ -315,12 +318,15 @@ final class TmuxModel: ObservableObject, Identifiable {
             if let activity = Self.activity(raw) { newActivities[w.id] = activity }
             if let lines = Self.footer(raw) { newStatusLines[w.id] = lines }
             if w.state == .claudeNeedsYou {
-                options[w.id] = Self.promptOptions(raw.suffix(15).map(stripANSI))
+                let plainTail = raw.suffix(45).map(stripANSI)
+                options[w.id] = Self.promptOptions(plainTail)
+                questions[w.id] = Self.promptQuestion(plainTail)
             } else if let suggestion = Self.suggestion(raw) {
                 newSuggestions[w.id] = suggestion
             }
         }
         if options != promptOptions { promptOptions = options }
+        if questions != promptQuestions { promptQuestions = questions }
         if newSuggestions != suggestions { suggestions = newSuggestions }
         if newActivities != activities { activities = newActivities }
         recoverStuckMessages(allItems, captures: captures)
@@ -519,6 +525,36 @@ final class TmuxModel: ObservableObject, Identifiable {
     }
 
     /// Pulls numbered choices like "❯ 1. Yes" out of a Claude permission prompt.
+    /// The text just above a numbered choice list: the question being asked.
+    static func promptQuestion(_ lines: [String]) -> String? {
+        let option = try! Regex(#"^[\s│|]*(?:❯\s*)?\d\.\s+"#)
+        guard let first = lines.firstIndex(where: { $0.firstMatch(of: option) != nil }) else { return nil }
+        var collected: [String] = []
+        var i = first - 1
+        while i >= 0, collected.count < 3 {
+            let t = lines[i].trimmingCharacters(in: .whitespaces)
+                .trimmingCharacters(in: CharacterSet(charactersIn: "│|╭╮╰╯ "))
+            if t.isEmpty || t.hasPrefix("─") || t.hasPrefix("━") {
+                if !collected.isEmpty { break }
+            } else {
+                collected.insert(t, at: 0)
+            }
+            i -= 1
+        }
+        let q = collected.joined(separator: " ")
+        return q.isEmpty ? nil : q
+    }
+
+    /// Picks a choice by its number, then types `text` (for "Type something" answers) and submits.
+    func answer(key: String, text: String, in w: TmuxWindow) {
+        let t = sq(target(w))
+        Task {
+            _ = await remote.run("tmux send-keys -t \(t) \(sq(key)) && sleep 0.4 && tmux send-keys -t \(t) -l \(sq(text)) && sleep 0.2 && tmux send-keys -t \(t) Enter")
+            try? await Task.sleep(for: .milliseconds(300))
+            await refresh()
+        }
+    }
+
     static func promptOptions(_ lines: [String]) -> [PromptOption] {
         let pattern = try! Regex(#"^[\s│|]*(?:❯\s*)?(\d)\.\s+(.+?)[\s│|]*$"#)
         var seen = Set<String>()

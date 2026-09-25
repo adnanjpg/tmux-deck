@@ -17,6 +17,19 @@ struct ChatItem: Identifiable, Equatable, Codable {
     var isError = false
     var images: Int? = nil
     var background: Bool? = nil
+    /// For AskUserQuestion: the questions Claude asked, with options and descriptions.
+    var questions: [AskQuestion]? = nil
+}
+
+struct AskQuestion: Codable, Equatable, Hashable {
+    struct Option: Codable, Equatable, Hashable {
+        var label: String
+        var description: String?
+    }
+    var question: String
+    var header: String?
+    var multiSelect: Bool?
+    var options: [Option]
 }
 
 struct PendingMessage: Identifiable, Equatable {
@@ -90,7 +103,7 @@ final class ChatStore: ObservableObject {
 
     private var cacheURL: URL {
         let dir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("TmuxDeck/chats-v7", isDirectory: true)
+            .appendingPathComponent("TmuxDeck/chats-v8", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir.appendingPathComponent("\(sessionID).json")
     }
@@ -115,6 +128,12 @@ final class ChatStore: ObservableObject {
         // Slash commands (/clear, /compact…) aren't chat messages, so they'd never be confirmed.
         if images == 0 && text.trimmingCharacters(in: .whitespaces).hasPrefix("/") { return }
         sending.append(PendingMessage(text: text, images: images))
+    }
+
+    /// The question Claude is waiting on, if its last AskUserQuestion has no answer yet.
+    var pendingQuestions: [AskQuestion]? {
+        guard let item = items.last(where: { $0.questions != nil }), item.result == nil else { return nil }
+        return item.questions
     }
 
     func dismissSending(_ id: UUID) {
@@ -180,7 +199,8 @@ final class ChatStore: ObservableObject {
                                                           summary: obj["s"] as? String ?? "",
                                                           added: obj["add"] as? Int ?? 0,
                                                           removed: obj["rem"] as? Int ?? 0),
-                                      background: (obj["bg"] as? Bool) == true ? true : nil))
+                                      background: (obj["bg"] as? Bool) == true ? true : nil,
+                                      questions: (obj["q"] as? String).flatMap { try? JSONDecoder().decode([AskQuestion].self, from: Data($0.utf8)) }))
             case "result":
                 let target = obj["for"] as? String ?? ""
                 if let i = fresh.lastIndex(where: { $0.id == target }) {
@@ -378,7 +398,8 @@ for raw in data[:end].splitlines():
                     add = inp["content"].count("\n") + 1
                 emit(k="tool", id=part.get("id", f"{uid}-{i}"), name=part.get("name", "Tool"),
                      s=cut(summary(part.get("name"), inp), 400), add=add, rem=rem,
-                     bg=bool(isinstance(inp, dict) and inp.get("run_in_background")))
+                     bg=bool(isinstance(inp, dict) and inp.get("run_in_background")),
+                     q=json.dumps(inp.get("questions")) if part.get("name") == "AskUserQuestion" and isinstance(inp, dict) else None)
 
 if off == 0:
     keep = ("result", "q+", "q-", "qx")

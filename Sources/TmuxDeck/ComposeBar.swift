@@ -25,7 +25,11 @@ struct ComposeBar: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             if window.state == .claudeNeedsYou, let options = model.promptOptions[window.id], !options.isEmpty {
-                promptButtons(options)
+                if let sid = window.claude?.sessionID, let asked = model.chatStore(for: sid).pendingQuestions {
+                    QuestionCard(questions: asked, screenOptions: options, window: window)
+                } else {
+                    promptButtons(options)
+                }
             }
             if !attachments.isEmpty { attachmentStrip }
             HStack(alignment: .bottom, spacing: 8) {
@@ -103,9 +107,20 @@ struct ComposeBar: View {
     }
 
     private func promptButtons(_ options: [PromptOption]) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .top, spacing: 8) {
+                Image(systemName: "exclamationmark.bubble.fill").foregroundStyle(.orange)
+                Text(model.promptQuestions[window.id] ?? "Claude is asking")
+                    .font(.callout.weight(.semibold))
+                    .fixedSize(horizontal: false, vertical: true)
+                    .textSelection(.enabled)
+            }
+            promptButtonRow(options)
+        }
+    }
+
+    private func promptButtonRow(_ options: [PromptOption]) -> some View {
         HStack(spacing: 8) {
-            Image(systemName: "exclamationmark.bubble.fill").foregroundStyle(.orange)
-            Text("Claude is asking").font(.callout).foregroundStyle(.secondary)
             ForEach(options, id: \.key) { option in
                 Button {
                     model.send(keys: [option.key], to: window, literal: true)
@@ -364,5 +379,110 @@ final class ComposeNSTextView: NSTextView {
             if let key = map[event.keyCode] { onForward?([key]); return }
         }
         super.keyDown(with: event)
+    }
+}
+
+/// Claude's AskUserQuestion as a proper card: the question, each option with its
+/// explanation, your own answer, and "Chat about this".
+struct QuestionCard: View {
+    @EnvironmentObject private var model: TmuxModel
+    let questions: [AskQuestion]
+    let screenOptions: [PromptOption]
+    let window: TmuxWindow
+    @State private var custom = ""
+
+    /// The question on screen now: the one whose options match the numbered choices shown.
+    private var currentIndex: Int {
+        let labels = Set(screenOptions.map { $0.label.lowercased() })
+        return questions.firstIndex { q in q.options.contains { labels.contains($0.label.lowercased()) } } ?? 0
+    }
+
+    /// The number to press for an option, from the choices on screen (falls back to its position).
+    private func key(for label: String, fallback: Int) -> String {
+        screenOptions.first { $0.label.lowercased().hasPrefix(label.lowercased()) }?.key ?? "\(fallback)"
+    }
+
+    private func extra(_ words: String) -> PromptOption? {
+        screenOptions.first { $0.label.lowercased().contains(words) }
+    }
+
+    var body: some View {
+        let i = min(currentIndex, questions.count - 1)
+        let q = questions[i]
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                Image(systemName: "exclamationmark.bubble.fill").foregroundStyle(.orange)
+                if let header = q.header, !header.isEmpty {
+                    Text(header).font(.caption.weight(.semibold))
+                        .padding(.horizontal, 7).padding(.vertical, 2)
+                        .background(Capsule().fill(Color.orange.opacity(0.15)))
+                        .foregroundStyle(.orange)
+                }
+                if questions.count > 1 {
+                    Text("Question \(i + 1) of \(questions.count)").font(.caption).foregroundStyle(.secondary)
+                }
+                if q.multiSelect == true {
+                    Text("Choose all that apply").font(.caption).foregroundStyle(.secondary)
+                }
+                Spacer()
+            }
+            Text(q.question)
+                .font(.body.weight(.semibold))
+                .fixedSize(horizontal: false, vertical: true)
+                .textSelection(.enabled)
+            VStack(spacing: 6) {
+                ForEach(Array(q.options.enumerated()), id: \.offset) { n, option in
+                    let k = key(for: option.label, fallback: n + 1)
+                    Button { model.send(keys: [k], to: window, literal: true) } label: {
+                        HStack(alignment: .top, spacing: 10) {
+                            Text(k).font(.caption.monospacedDigit().weight(.semibold))
+                                .frame(width: 20, height: 20)
+                                .background(Circle().fill(Color.accentColor.opacity(0.15)))
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(option.label).fontWeight(.medium)
+                                if let d = option.description, !d.isEmpty {
+                                    Text(d).font(.callout).foregroundStyle(.secondary)
+                                        .fixedSize(horizontal: false, vertical: true)
+                                }
+                            }
+                            Spacer(minLength: 0)
+                        }
+                        .padding(10)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(RoundedRectangle(cornerRadius: 8).fill(Color.secondary.opacity(0.07)))
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .help("Answer \(k)")
+                }
+            }
+            HStack(spacing: 8) {
+                if let typeOption = extra("type something") {
+                    TextField("Or type your own answer", text: $custom)
+                        .textFieldStyle(.roundedBorder)
+                        .onSubmit { sendCustom(typeOption.key) }
+                    Button("Answer") { sendCustom(typeOption.key) }
+                        .disabled(custom.trimmingCharacters(in: .whitespaces).isEmpty)
+                }
+                if let chat = extra("chat about") {
+                    Button("Chat about this") { model.send(keys: [chat.key], to: window, literal: true) }
+                        .help("Discuss it with Claude instead of picking an option")
+                }
+                if q.multiSelect == true {
+                    Button("Submit") { model.send(keys: ["Enter"], to: window) }
+                }
+            }
+            .controlSize(.small)
+        }
+        .padding(12)
+        .background(RoundedRectangle(cornerRadius: 12).fill(Color.orange.opacity(0.06)))
+        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Color.orange.opacity(0.35)))
+    }
+
+    private func sendCustom(_ key: String) {
+        let text = custom.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return }
+        model.answer(key: key, text: text, in: window)
+        custom = ""
     }
 }
