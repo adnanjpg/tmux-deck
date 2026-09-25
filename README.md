@@ -61,7 +61,7 @@ To update, `git pull` and run `./build-app.sh` again.
 - The sidebar refreshes every 2 seconds from `tmux list-panes`.
 - Claude Code writes a record for each running session in `~/.claude/sessions/<pid>.json`, including its tmux pane and status. The app uses that to match windows to conversations, then reads new lines from the conversation log in `~/.claude/projects/`. Nothing is installed on the server; the small Python reader is sent over SSH each time.
 - Messages you send are pasted into the pane with tmux's bracketed paste, so multi-line messages arrive as one.
-- The raw terminal view attaches to a private tmux session grouped with yours (`deck-…`). It has its own current window, so it never moves your other tmux clients around, and it's removed automatically when the app disconnects.
+- The raw terminal view attaches to a private tmux session grouped with yours (`deck-…`). It has its own current window, so it never moves your other tmux clients around, and the app closes leftover ones itself (only when your real session still holds the windows).
 - Sounds and font size are in Tmux Deck → Settings (⌘,). Servers are added and removed from the sidebar.
 
 ## Limitations

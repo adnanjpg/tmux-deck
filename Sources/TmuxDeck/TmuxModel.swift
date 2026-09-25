@@ -180,6 +180,9 @@ final class TmuxModel: ObservableObject, Identifiable {
                       "pane_id", "pane_index", "pane_active", "window_zoomed_flag"]
         let format = fields.map { "#{\($0)}" }.joined(separator: sep)
         return """
+        tmux list-sessions -F '#{session_name} #{session_attached} #{session_group_size}' 2>/dev/null \
+          | awk '$1 ~ /^\(viewSessionPrefix)/ && $2 == 0 && $3 > 1 {print $1}' \
+          | while read -r s; do tmux kill-session -t "=$s"; done
         tmux list-panes -a -F \(sq(format)) 2>/dev/null || echo @@NOSERVER
         for f in ~/.claude/sessions/*.json; do
           [ -f "$f" ] || continue

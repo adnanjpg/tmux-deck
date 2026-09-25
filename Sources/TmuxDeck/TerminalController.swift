@@ -81,9 +81,12 @@ final class TerminalController: NSObject, LocalProcessTerminalViewDelegate {
     func connect(initialWindow: String?) {
         let select = initialWindow.map { " \\; select-window -t \(sq(":" + $0))" } ?? ""
         // Grouped session: shares windows with `session`, has its own current window.
-        // destroy-unattached cleans it up when the app disconnects or quits.
-        let script = "exec tmux new-session -t \(sq(session)) -s \(sq(viewSession))"
-            + " \\; set destroy-unattached on \\; set status off \\; set mouse on" + select
+        // Never set destroy-unattached here: in tmux 3.4 that also destroys the real
+        // session whenever nothing is attached to it, killing every window in it.
+        // Stale view sessions are cleaned up by TmuxModel's refresh instead.
+        let script = "tmux kill-session -t \(sq("=" + viewSession)) 2>/dev/null; "
+            + "exec tmux new-session -t \(sq(session)) -s \(sq(viewSession))"
+            + " \\; set status off \\; set mouse on" + select
 
         var env = ProcessInfo.processInfo.environment
         env["TERM"] = "xterm-256color"
