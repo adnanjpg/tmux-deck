@@ -22,7 +22,7 @@ struct TerminalPane: View {
                     ContentUnavailableView {
                         Label("Disconnected", systemImage: "wifi.exclamationmark")
                     } description: {
-                        Text("Your tmux windows are still running on \(controller.remote.host).")
+                        Text("Your tmux windows are still running on \(controller.remote.displayName).")
                     } actions: {
                         Button("Reconnect") { controller.reconnect(window: window.windowID) }
                             .keyboardShortcut(.defaultAction)

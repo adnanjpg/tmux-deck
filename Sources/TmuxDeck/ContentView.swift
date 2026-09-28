@@ -62,8 +62,8 @@ struct ContentView: View {
         }
         .navigationTitle(model.selectedWindow.map(model.displayTitle) ?? "Tmux Deck")
         .navigationSubtitle(model.selectedWindow.map { w in
-            (w.state.isClaude ? "\(w.state.label) · " : "") + "\(w.session) · \(model.host)"
-        } ?? model.host)
+            (w.state.isClaude ? "\(w.state.label) · " : "") + "\(w.session) · \(model.displayName)"
+        } ?? model.displayName)
         .toolbar { toolbar }
         .alert(renameTitle, isPresented: Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } })) {
             TextField("Name", text: $renameText)
@@ -297,12 +297,12 @@ struct ContentView: View {
                 .fill(model.connected ? Color.green : Color.orange)
                 .frame(width: 7, height: 7)
             Text(app.servers.count > 1 ? "\(app.servers.filter(\.connected).count) of \(app.servers.count) servers connected"
-                 : model.connected ? "Connected to \(model.host)" : "Reconnecting…")
+                 : model.connected ? "Connected to \(model.displayName)" : "Reconnecting…")
                 .lineLimit(1)
             Spacer()
             Menu {
                 Button("Add server…") { addingServer = true }
-                Button("New session on \(model.host)…") { target = model; renameText = ""; newSessionPrompt = true }
+                Button("New session on \(model.displayName)…") { target = model; renameText = ""; newSessionPrompt = true }
             } label: {
                 Image(systemName: "plus")
             }
@@ -350,7 +350,7 @@ struct ContentView: View {
                 .environmentObject(server)
         } else if let tag, let hash = tag.firstIndex(of: "#"),
                   let server = app.server(String(tag[..<hash])), !server.connected {
-            ProgressView("Connecting to \(server.host)…").frame(maxWidth: .infinity, maxHeight: .infinity)
+            ProgressView("Connecting to \(server.displayName)…").frame(maxWidth: .infinity, maxHeight: .infinity)
         } else if tag != nil {
             ContentUnavailableView {
                 Label("Window closed", systemImage: "xmark.rectangle")
@@ -532,6 +532,16 @@ struct AddServerView: View {
                 .multilineTextAlignment(.center)
                 .foregroundStyle(.secondary)
                 .frame(maxWidth: 420)
+            if !app.servers.contains(where: { $0.host == Remote.localHost }) {
+                Button { draft = Remote.localHost; connect() } label: {
+                    Label("This Mac — local tmux, no SSH", systemImage: "laptopcomputer")
+                        .frame(maxWidth: 300)
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
+                .help("Run tmux and Claude sessions on this Mac")
+                Text("or a server over SSH:").font(.caption).foregroundStyle(.secondary)
+            }
             let available = configured.filter { h in !app.servers.contains { $0.host == h } }
             if !available.isEmpty {
                 ScrollView {
@@ -588,7 +598,9 @@ struct AddServerView: View {
                 if forward { app.forwarders[candidate]?.setEnabled(true) }
                 if sheet { dismiss() }
             } else {
-                error = out == "notmux" ? "Connected, but tmux isn't installed on that machine."
+                error = out == "notmux"
+                    ? (candidate == Remote.localHost ? "tmux isn't installed on this Mac. Install it with: brew install tmux"
+                                                     : "Connected, but tmux isn't installed on that machine.")
                     : "Couldn't connect: \(result.stderr.trimmingCharacters(in: .whitespacesAndNewlines))"
             }
         }
@@ -610,7 +622,7 @@ struct ServerHeader: View {
     var body: some View {
         HStack(spacing: 6) {
             Circle().fill(server.connected ? Color.green : Color.orange).frame(width: 7, height: 7)
-            Text(server.host).font(.headline).foregroundStyle(.primary)
+            Text(server.displayName).font(.headline).foregroundStyle(.primary)
             if forwarder.enabled {
                 let f = forwarder
                 Button { showingPorts.toggle() } label: {
@@ -645,7 +657,7 @@ struct ServerHeader: View {
             .fixedSize()
         }
         .padding(.vertical, 2)
-        .confirmationDialog("Remove \(server.host)?", isPresented: $confirmRemove) {
+        .confirmationDialog("Remove \(server.displayName)?", isPresented: $confirmRemove) {
             Button("Remove server", role: .destructive, action: onRemove)
         } message: {
             Text("This only disconnects the app. Your tmux sessions keep running on the server.")
@@ -697,7 +709,7 @@ struct RestoreView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text("Restore windows on \(server.host)").font(.title3.weight(.semibold))
+            Text("Restore windows on \(server.displayName)").font(.title3.weight(.semibold))
             Text("Windows that existed before and aren't running now. Claude windows resume their conversation in their original folder; shells open in their folder.")
                 .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             if let candidates {

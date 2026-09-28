@@ -9,6 +9,16 @@ import Foundation
 struct Remote: Hashable {
     let host: String
 
+    /// The host name used for this Mac itself: commands run locally, no SSH.
+    static let localHost = "local"
+    var isLocal: Bool { host == Self.localHost }
+    var displayName: String { isLocal ? "This Mac" : host }
+
+    /// How to start an interactive command (the raw terminal view).
+    func interactiveCommand(_ script: String) -> (executable: String, args: [String]) {
+        isLocal ? ("/bin/zsh", ["-lc", script]) : ("/usr/bin/ssh", interactiveArguments(script))
+    }
+
     static let controlPath = "~/.ssh/tmuxdeck-%C"
 
     static var baseOptions: [String] {
@@ -46,10 +56,12 @@ struct Remote: Hashable {
     }
 
     func run(_ script: String, data input: Data?, timeout: TimeInterval = 15) async -> Result {
-        let args = Self.baseOptions + ["-o", "BatchMode=yes", host, script]
+        // This Mac: a login shell, so Homebrew's tmux and your PATH are there.
+        let executable = isLocal ? "/bin/zsh" : "/usr/bin/ssh"
+        let args = isLocal ? ["-lc", script] : Self.baseOptions + ["-o", "BatchMode=yes", host, script]
         return await Task.detached {
             let process = Process()
-            process.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
+            process.executableURL = URL(fileURLWithPath: executable)
             process.arguments = args
             let out = Pipe(), err = Pipe()
             process.standardOutput = out

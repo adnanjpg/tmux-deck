@@ -114,6 +114,8 @@ let viewSessionPrefix = "deck-"
 final class TmuxModel: ObservableObject, Identifiable {
     let remote: Remote
     var host: String { remote.host }
+    /// What to call this server in the UI ("This Mac" for the local machine).
+    var displayName: String { remote.displayName }
     nonisolated var id: String { remote.host }
     /// Called after each refresh so the app can update the Dock badge across servers.
     var onRefresh: (() -> Void)?
@@ -1033,7 +1035,7 @@ final class TmuxModel: ObservableObject, Identifiable {
             f="$1"
             \(imagePaste)tmux load-buffer -b deck-compose "$f" && tmux paste-buffer -p -d -b deck-compose -t \(t) || exit 1
             first=$(head -n1 "$f" | sed 's/^[[:space:]]*//' | cut -c1-20)
-            inbox() { tmux capture-pane -p -t \(t) | sed 's/\\xc2\\xa0/ /g' | grep '^❯' | tail -1 | cut -c4-; }
+            inbox() { tmux capture-pane -p -t \(t) | perl -pe 's/\\xc2\\xa0/ /g' | grep '^❯' | tail -1 | cut -c4-; }
             waiting() { l=$(inbox); case "$l" in *"$first"*|*"[Pasted text"*) return 0;; *) return 1;; esac; }
             for i in 1 2 3 4 5 6 7 8 9 10; do waiting && break; sleep 0.2; done
             sleep 0.3
@@ -1051,7 +1053,8 @@ final class TmuxModel: ObservableObject, Identifiable {
         f=$(mktemp) && cat > "$f" && s=$(mktemp) && cat > "$s" <<'DECK_SEND_EOF'
         \(inner)
         DECK_SEND_EOF
-        setsid nohup bash "$s" "$f" >/dev/null 2>&1 </dev/null &
+        if command -v setsid >/dev/null 2>&1; then setsid nohup bash "$s" "$f" >/dev/null 2>&1 </dev/null &
+        else nohup bash "$s" "$f" >/dev/null 2>&1 </dev/null & fi
         """
         Task {
             let result = await remote.run(script, input: text)
@@ -1071,7 +1074,7 @@ final class TmuxModel: ObservableObject, Identifiable {
             check = "! grep -qiE \(sq(markers.joined(separator: "|")))"
         }
         let script = """
-        footer() { tmux capture-pane -p -t \(t) | sed 's/\\xc2\\xa0/ /g' | tail -6; }
+        footer() { tmux capture-pane -p -t \(t) | perl -pe 's/\\xc2\\xa0/ /g' | tail -6; }
         for i in 1 2 3 4 5 6 7; do footer | \(check) && exit 0; tmux send-keys -t \(t) BTab; sleep 0.5; done
         exit 3
         """

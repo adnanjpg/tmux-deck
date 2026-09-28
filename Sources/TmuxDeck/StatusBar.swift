@@ -212,7 +212,7 @@ private struct ChipView: View {
             popoverChip { Label(chip.text, systemImage: "person.2").foregroundStyle(.secondary) } content: {
                 AgentsList { w in open = false; model.userSelected(w.id) }
             }
-            .help("Claude sessions on \(model.host)")
+            .help("Claude sessions on \(model.displayName)")
         case .activity where chip.text.contains("shell"):
             popoverChip { Label(chip.text, systemImage: "terminal").foregroundStyle(.secondary) } content: {
                 if let sid = window.claude?.sessionID {
@@ -443,7 +443,7 @@ struct AgentsList: View {
     var body: some View {
         let items = model.sessions.flatMap(\.windows).flatMap { $0.paneItems.isEmpty ? [$0] : $0.paneItems }.filter(\.state.isClaude)
         VStack(alignment: .leading, spacing: 8) {
-            Text("Claude sessions on \(model.host)").font(.headline)
+            Text("Claude sessions on \(model.displayName)").font(.headline)
             ForEach(items) { w in
                 Button { onPick(w) } label: {
                     HStack(spacing: 8) {

@@ -225,6 +225,7 @@ final class PortForwarder: ObservableObject {
 
     /// Local ports from the host's LocalForward rules, as ssh resolves them.
     static func configuredPorts(_ host: String) -> [Int] {
+        if host == Remote.localHost || host.isEmpty { return [] }
         let p = Process()
         p.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
         p.arguments = ["-G", host]

@@ -104,8 +104,9 @@ final class TerminalController: NSObject, LocalProcessTerminalViewDelegate {
         env["COLORTERM"] = "truecolor"
         env["LANG"] = env["LANG"] ?? "en_US.UTF-8"
         alive = true
-        view.startProcess(executable: "/usr/bin/ssh",
-                          args: remote.interactiveArguments(script),
+        let command = remote.interactiveCommand(script)
+        view.startProcess(executable: command.executable,
+                          args: command.args,
                           environment: env.map { "\($0.key)=\($0.value)" })
         onStateChange?()
     }

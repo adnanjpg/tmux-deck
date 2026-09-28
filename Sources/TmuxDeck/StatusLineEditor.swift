@@ -27,7 +27,7 @@ struct StatusLineEditor: View {
                 .fixedSize(horizontal: false, vertical: true)
 
             if loading {
-                ProgressView("Reading settings from \(model.host)…").frame(maxWidth: .infinity, minHeight: 200)
+                ProgressView("Reading settings from \(model.displayName)…").frame(maxWidth: .infinity, minHeight: 200)
             } else {
                 VStack(alignment: .leading, spacing: 6) {
                     Text("Command").font(.headline)

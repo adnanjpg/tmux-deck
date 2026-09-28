@@ -458,7 +458,7 @@ private struct TileHeader: View {
                 Text(server.displayTitle(window))
                     .font(.callout.weight(focused ? .semibold : .regular))
                     .lineLimit(1)
-                Text(app.servers.count > 1 ? "\(server.host) · \(window.session)" : window.session)
+                Text(app.servers.count > 1 ? "\(server.displayName) · \(window.session)" : window.session)
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
