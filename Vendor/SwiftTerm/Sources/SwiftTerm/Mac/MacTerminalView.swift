@@ -484,7 +484,7 @@ open class TerminalView: NSView, NSUserInterfaceValidations, TerminalDelegate {
     var caretView: CaretView!
     var _fontSmoothing: Bool = true
     var _lineSpacing: CGFloat = 1.0
-    var terminal: Terminal!
+    public internal(set) var terminal: Terminal!
 
     /// Marked (uncommitted) text from an input source (IME, dictation, etc.).
     private var markedTextStorage: NSAttributedString?

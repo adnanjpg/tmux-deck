@@ -32,6 +32,7 @@ final class AppModel: ObservableObject {
 
     func start() {
         MacKeys.install()
+        TabSwitcherController.shared.installMonitors()
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { _, _ in }
         for s in servers { s.start() }
         for f in forwarders.values where f.enabled { f.start() }
@@ -109,29 +110,31 @@ final class AppModel: ObservableObject {
         server(host)?.userSelected(id)
     }
 
-    // MARK: Tab cycling (⌃⇥ / ⌃⇧⇥)
+    // MARK: Tab switching (⌃⇥ / ⌃⇧⇥ — see TabSwitcher.swift)
 
-    /// Every open item in sidebar order: this Mac's plain terminals, then each
-    /// server's windows (not their individual panes — that's one tab per window,
-    /// same as a browser tab bar).
-    private var allTabTags: [String] {
-        var tags = PlainTerminalStore.shared.terminals.map(\.tag)
-        for server in servers {
-            for session in server.sessions {
-                for w in session.windows { tags.append("\(server.host)#\(w.id)") }
-            }
+    /// Every open item, grouped the same way the sidebar groups them: this
+    /// Mac's plain terminals first, then each server's windows (not their
+    /// individual panes — one entry per window, same granularity as a browser tab).
+    func groupedTabs() -> [TabGroup] {
+        var groups: [TabGroup] = []
+        let plainTerminals = PlainTerminalStore.shared.terminals
+        if !plainTerminals.isEmpty {
+            groups.append(TabGroup(label: "This Mac · terminals", items: plainTerminals.map { t in
+                TabInfo(tag: t.tag, title: t.title, subtitle: t.running ? (t.kind == .claude ? "Claude" : "Terminal") : "Ended",
+                       icon: t.kind == .claude ? "sparkle" : "terminal", stateColor: nil)
+            }))
         }
-        return tags
-    }
-
-    /// Moves the focused tile to the next (or, with a negative delta, previous) tab, wrapping around.
-    func cycleTabs(_ delta: Int) {
-        let tags = allTabTags
-        guard !tags.isEmpty else { return }
-        let current = LayoutModel.shared.focusedTag.flatMap { tags.firstIndex(of: $0) }
-        let base = current ?? (delta > 0 ? -1 : 0)
-        let next = (base + delta + tags.count) % tags.count
-        LayoutModel.shared.show(tags[next])
+        for server in servers {
+            let items = server.sessions.flatMap { session in
+                session.windows.map { w -> TabInfo in
+                    let (icon, color) = TabInfo.iconAndColor(for: w.state)
+                    return TabInfo(tag: "\(server.host)#\(w.id)", title: server.displayTitle(w),
+                                   subtitle: "\(session.name) · \(w.state.label)", icon: icon, stateColor: color)
+                }
+            }
+            if !items.isEmpty { groups.append(TabGroup(label: server.displayName, items: items)) }
+        }
+        return groups
     }
 
     /// Host names from ~/.ssh/config, for the Add server list.

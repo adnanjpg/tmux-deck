@@ -245,6 +245,22 @@ final class ClickThroughTextView: NSTextView {
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 }
 
+extension TerminalView {
+    /// The screen's current text (no scrollback), last non-blank lines first —
+    /// used for the ⌃⇥ switcher's live preview. Reads straight from the live
+    /// buffer, so it works even for a terminal that isn't on screen right now.
+    func visibleScreenText(maxLines: Int = 10) -> String {
+        guard let t = terminal else { return "" }
+        var lines: [String] = []
+        for r in 0..<t.rows {
+            guard let line = t.getLine(row: r) else { continue }
+            let text = line.translateToString(trimRight: true)
+            if !text.isEmpty { lines.append(text) }
+        }
+        return lines.suffix(maxLines).joined(separator: "\n")
+    }
+}
+
 /// Theme colors for any terminal view (tmux or plain).
 @MainActor
 func applyTerminalTheme(to view: LocalProcessTerminalView) {

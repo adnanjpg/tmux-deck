@@ -43,9 +43,9 @@ struct TmuxDeckApp: App {
                     .keyboardShortcut("f", modifiers: [.command, .control])
             }
             CommandMenu("Tmux") {
-                Button("Next tab") { app.cycleTabs(1) }
+                Button("Next tab") { TabSwitcherController.shared.advance(1) }
                     .keyboardShortcut(.tab, modifiers: [.control])
-                Button("Previous tab") { app.cycleTabs(-1) }
+                Button("Previous tab") { TabSwitcherController.shared.advance(-1) }
                     .keyboardShortcut(.tab, modifiers: [.control, .shift])
                 Divider()
                 Button("Split right") { model?.split(vertical: false) }
