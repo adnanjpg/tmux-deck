@@ -109,6 +109,31 @@ final class AppModel: ObservableObject {
         server(host)?.userSelected(id)
     }
 
+    // MARK: Tab cycling (⌃⇥ / ⌃⇧⇥)
+
+    /// Every open item in sidebar order: this Mac's plain terminals, then each
+    /// server's windows (not their individual panes — that's one tab per window,
+    /// same as a browser tab bar).
+    private var allTabTags: [String] {
+        var tags = PlainTerminalStore.shared.terminals.map(\.tag)
+        for server in servers {
+            for session in server.sessions {
+                for w in session.windows { tags.append("\(server.host)#\(w.id)") }
+            }
+        }
+        return tags
+    }
+
+    /// Moves the focused tile to the next (or, with a negative delta, previous) tab, wrapping around.
+    func cycleTabs(_ delta: Int) {
+        let tags = allTabTags
+        guard !tags.isEmpty else { return }
+        let current = LayoutModel.shared.focusedTag.flatMap { tags.firstIndex(of: $0) }
+        let base = current ?? (delta > 0 ? -1 : 0)
+        let next = (base + delta + tags.count) % tags.count
+        LayoutModel.shared.show(tags[next])
+    }
+
     /// Host names from ~/.ssh/config, for the Add server list.
     static func configuredHosts() -> [String] {
         let url = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".ssh/config")

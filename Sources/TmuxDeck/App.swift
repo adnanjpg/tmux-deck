@@ -33,6 +33,9 @@ struct TmuxDeckApp: App {
                 Button("New Claude on this Mac (no tmux)") {
                     LayoutModel.shared.show(PlainTerminalStore.shared.new(.claude).tag)
                 }
+                Divider()
+                Button("Close") { LayoutModel.shared.requestCloseFocused() }
+                    .keyboardShortcut("w", modifiers: [.command])
             }
             CommandGroup(after: .sidebar) {
                 Button("Choose Theme…") { NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil) }
@@ -40,6 +43,11 @@ struct TmuxDeckApp: App {
                     .keyboardShortcut("f", modifiers: [.command, .control])
             }
             CommandMenu("Tmux") {
+                Button("Next tab") { app.cycleTabs(1) }
+                    .keyboardShortcut(.tab, modifiers: [.control])
+                Button("Previous tab") { app.cycleTabs(-1) }
+                    .keyboardShortcut(.tab, modifiers: [.control, .shift])
+                Divider()
                 Button("Split right") { model?.split(vertical: false) }
                     .keyboardShortcut("d")
                 Button("Split down") { model?.split(vertical: true) }

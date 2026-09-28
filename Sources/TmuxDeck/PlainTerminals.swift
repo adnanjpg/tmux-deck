@@ -30,7 +30,7 @@ final class PlainTerminal: NSObject, ObservableObject, Identifiable, LocalProces
         self.kind = kind
         self.folder = folder
         self.name = name
-        self.view = LocalProcessTerminalView(frame: NSRect(x: 0, y: 0, width: 800, height: 600))
+        self.view = ClickableTerminalView(frame: NSRect(x: 0, y: 0, width: 800, height: 600))
         super.init()
         view.processDelegate = self
         view.font = NSFont.monospacedSystemFont(ofSize: CGFloat(UserDefaults.standard.double(forKey: "fontSize").nonZero ?? 13), weight: .regular)
@@ -231,6 +231,18 @@ struct PlainTerminalRow: View {
         }
         .padding(.vertical, 2)
     }
+}
+
+/// A terminal view that responds to its very first click even when the app's
+/// window isn't key yet — otherwise that click only activates the window and
+/// the terminal itself ignores it, which looks exactly like the UI "not working".
+final class ClickableTerminalView: LocalProcessTerminalView {
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+}
+
+/// Same first-click fix for read-only text (the console view for plain shells).
+final class ClickThroughTextView: NSTextView {
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 }
 
 /// Theme colors for any terminal view (tmux or plain).

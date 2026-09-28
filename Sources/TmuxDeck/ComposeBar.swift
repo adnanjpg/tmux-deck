@@ -313,6 +313,11 @@ struct ComposeTextView: NSViewRepresentable {
 }
 
 final class ComposeNSTextView: NSTextView {
+    // Without this, the first click into the box (when the window isn't key
+    // yet) only activates the window; the click itself is swallowed, so you
+    // see no cursor and have to click a second time.
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
     var onSubmit: (() -> Void)?
     var onForward: (([String]) -> Void)?
     var onAcceptSuggestion: (() -> Void)?

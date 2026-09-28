@@ -19,6 +19,7 @@ tmux stays the backend. Your sessions keep running on the server when the app cl
 - **A raw terminal view** (⌥⌘T) for anything interactive, like vim or htop.
 - **Restore lost sessions.** The app remembers each server's sessions and windows. If tmux loses them (a crash, a reboot), the sidebar offers Restore previous sessions: pick windows and it recreates them in their folders, resuming each Claude conversation with `claude --resume`. It also uses the session records Claude Code leaves on the server, so it can recover Claude windows it never saw. Also in each server's ••• menu.
 - **VS Code themes.** Settings → Themes lists every theme in VS Code, Cursor and your installed VS Code extensions (following `include` chains), plus Match VS Code to follow VS Code's current theme, and Import… for a theme `.json` or `.vsix`. A theme colors the chat, sidebar, input, tool rows, code blocks (with syntax highlighting from the theme's token colors), the console and the raw terminal (16 ANSI colors, cursor, selection).
+- **Keyboard-first.** ⌘W closes whatever the focused tile is showing (window, pane or plain terminal) with a confirmation you can drive entirely from the keyboard (Esc/Return to cancel, ⌘Return to confirm). ⌃⇥ / ⌃⇧⇥ cycle through every open tab across every server and this Mac's plain terminals, like a browser's tab switcher.
 - **Split view.** Drag a window from the sidebar onto the main area: drop on an edge to split left, right, above or below, or in the middle to replace. Drag a tile's title bar to move it, drag the dividers to resize, ✕ to close a tile, or ⇧⌘U to go back to one. Right-click a window for Open to the right / Open below. Clicking a window in the sidebar opens it on its own (or focuses its tile if it's already on screen). Splits nest, animate, and are remembered.
 - **This Mac too, with or without tmux.** From + → Add server, pick This Mac — tmux sessions (local tmux with the same chat view, split view and everything else, no SSH; needs `brew install tmux`), or This Mac — plain terminals: normal shells or Claude running directly in the app, like Terminal.app tabs (⇧⌘T), with themes, Mac shortcuts and split view. Plain terminals end when the app quits and reopen in the same folders next launch.
 - **Several servers at once.** Add servers from the + button (it lists the hosts in your `~/.ssh/config`); each gets its own section in the sidebar.
@@ -58,6 +59,8 @@ To update, `git pull` and run `./build-app.sh` again.
 | Pull requests panel | ⇧⌘P |
 | Close other tiles | ⇧⌘U |
 | Full screen | ⌃⌘F |
+| Close the focused window/pane/terminal (with confirmation) | ⌘W |
+| Next / previous tab (cycles everything open, servers and this Mac) | ⌃⇥ / ⌃⇧⇥ |
 | Settings (themes, sounds) | ⌘, |
 | Previous / next window | ⌘[ / ⌘] |
 | Go to window 1–9 | ⌘1 … ⌘9 |

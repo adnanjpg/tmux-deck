@@ -58,6 +58,18 @@ struct ContentView: View {
                 Button("Rename") { if let t = renamingPlain { plain.rename(t, to: renameText) } }
                 Button("Cancel", role: .cancel) {}
             }
+            .confirmationDialog(
+                layout.confirmClose?.title ?? "",
+                isPresented: Binding(get: { layout.confirmClose != nil }, set: { if !$0 { layout.confirmClose = nil } })
+            ) {
+                Button("Cancel", role: .cancel) { layout.confirmClose = nil }
+                    .keyboardShortcut(.cancelAction)
+                    .keyboardShortcut(.defaultAction)
+                Button(layout.confirmClose?.actionLabel ?? "Close", role: .destructive) { layout.performConfirmedClose() }
+                    .keyboardShortcut(.init("\r"), modifiers: [.command])
+            } message: {
+                Text(layout.confirmClose?.message ?? "")
+            }
     }
 
     private var main: some View {
@@ -94,9 +106,13 @@ struct ContentView: View {
             closing?.isPane == true ? "Close this pane?" : "Close “\(closing.map(acting.displayTitle) ?? "")”?",
             isPresented: Binding(get: { closing != nil }, set: { if !$0 { closing = nil } })
         ) {
+            Button("Cancel", role: .cancel) { closing = nil }
+                .keyboardShortcut(.cancelAction)
+                .keyboardShortcut(.defaultAction)
             Button(closing?.isPane == true ? "Close pane" : "Close window", role: .destructive) {
                 if let closing { closing.isPane ? acting.killPane(closing) : acting.close(closing) }
             }
+            .keyboardShortcut(.init("\r"), modifiers: [.command])
         } message: {
             Text("Anything running in it, including a Claude session, will stop.")
         }
@@ -104,7 +120,11 @@ struct ContentView: View {
             "Close session “\(closingSession ?? "")”?",
             isPresented: Binding(get: { closingSession != nil }, set: { if !$0 { closingSession = nil } })
         ) {
+            Button("Cancel", role: .cancel) { closingSession = nil }
+                .keyboardShortcut(.cancelAction)
+                .keyboardShortcut(.defaultAction)
             Button("Close session", role: .destructive) { if let closingSession { acting.killSession(closingSession) } }
+                .keyboardShortcut(.init("\r"), modifiers: [.command])
         } message: {
             Text("All of its windows and everything running in them will stop.")
         }
@@ -141,7 +161,7 @@ struct ContentView: View {
                                 Divider()
                                 Button("Rename…") { renameText = t.title; renamingPlain = t }
                                 Divider()
-                                Button("Close terminal", role: .destructive) { plain.close(t) }
+                                Button("Close terminal", role: .destructive) { layout.confirmClose = .plainTerminal(t, tag: t.tag) }
                             }
                     }
                     if plain.terminals.isEmpty {
@@ -729,7 +749,11 @@ struct ServerHeader: View {
         }
         .padding(.vertical, 2)
         .confirmationDialog("Remove \(server.displayName)?", isPresented: $confirmRemove) {
+            Button("Cancel", role: .cancel) { confirmRemove = false }
+                .keyboardShortcut(.cancelAction)
+                .keyboardShortcut(.defaultAction)
             Button("Remove server", role: .destructive, action: onRemove)
+                .keyboardShortcut(.init("\r"), modifiers: [.command])
         } message: {
             Text("This only disconnects the app. Your tmux sessions keep running on the server.")
         }

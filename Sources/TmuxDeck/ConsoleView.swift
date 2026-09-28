@@ -35,8 +35,12 @@ struct OutputTextView: NSViewRepresentable {
     let theme: AppTheme
 
     func makeNSView(context: Context) -> NSScrollView {
-        let scroll = NSTextView.scrollableTextView()
-        let tv = scroll.documentView as! NSTextView
+        let scroll = NSScrollView()
+        scroll.hasVerticalScroller = true
+        scroll.autohidesScrollers = true
+        scroll.borderType = .noBorder
+
+        let tv = ClickThroughTextView()
         tv.isEditable = false
         tv.isSelectable = true
         tv.usesFindBar = true
@@ -44,7 +48,13 @@ struct OutputTextView: NSViewRepresentable {
         tv.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
         tv.textContainerInset = NSSize(width: 16, height: 14)
         tv.backgroundColor = .textBackgroundColor
-        scroll.hasVerticalScroller = true
+        tv.isVerticallyResizable = true
+        tv.isHorizontallyResizable = false
+        tv.autoresizingMask = [.width]
+        tv.textContainer?.widthTracksTextView = true
+        tv.minSize = NSSize(width: 0, height: 0)
+        tv.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+        scroll.documentView = tv
         return scroll
     }
 

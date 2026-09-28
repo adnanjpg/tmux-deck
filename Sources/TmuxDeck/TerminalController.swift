@@ -22,7 +22,7 @@ final class TerminalController: NSObject, LocalProcessTerminalViewDelegate {
         self.session = session
         self.remote = remote
         self.viewSession = viewSessionPrefix + session + "-" + String(UUID().uuidString.prefix(4)).lowercased()
-        self.view = LocalProcessTerminalView(frame: NSRect(x: 0, y: 0, width: 800, height: 600))
+        self.view = ClickableTerminalView(frame: NSRect(x: 0, y: 0, width: 800, height: 600))
         super.init()
         view.processDelegate = self
         view.font = NSFont.monospacedSystemFont(ofSize: CGFloat(UserDefaults.standard.double(forKey: "fontSize").nonZero ?? 13), weight: .regular)

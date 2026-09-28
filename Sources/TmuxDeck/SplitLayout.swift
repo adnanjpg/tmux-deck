@@ -87,6 +87,40 @@ indirect enum LayoutNode: Codable, Equatable {
     }
 }
 
+/// What ⌘W is being asked to close.
+enum CloseRequest: Identifiable {
+    case window(TmuxModel, TmuxWindow, tag: String)
+    case pane(TmuxModel, TmuxWindow, tag: String)
+    case plainTerminal(PlainTerminal, tag: String)
+
+    var id: String { tag }
+    var tag: String {
+        switch self {
+        case .window(_, _, let t), .pane(_, _, let t), .plainTerminal(_, let t): t
+        }
+    }
+    @MainActor var title: String {
+        switch self {
+        case .window(let server, let w, _): "Close “\(server.displayTitle(w))”?"
+        case .pane: "Close this pane?"
+        case .plainTerminal(let t, _): "Close “\(t.title)”?"
+        }
+    }
+    var actionLabel: String {
+        switch self {
+        case .window: "Close window"
+        case .pane: "Close pane"
+        case .plainTerminal: "Close terminal"
+        }
+    }
+    var message: String {
+        switch self {
+        case .plainTerminal: "The running process will end."
+        default: "Anything running in it, including a Claude session, will stop."
+        }
+    }
+}
+
 struct LayoutDivider: Identifiable {
     let splitID: String
     let axis: SplitAxis
@@ -273,6 +307,44 @@ final class LayoutModel: ObservableObject {
     }
 
     func finishResize() { save() }
+
+    // MARK: Closing with confirmation (⌘W, and the sidebar's own close actions)
+
+    @Published var confirmClose: CloseRequest?
+
+    /// ⌘W: ask to close whatever the focused tile is showing.
+    func requestCloseFocused() {
+        guard let tag = focusedTag else { return }
+        if let t = PlainTerminalStore.shared.terminal(forTag: tag) {
+            confirmClose = .plainTerminal(t, tag: tag)
+        } else if let (server, window) = TileResolver.resolve(tag) {
+            confirmClose = window.isPane ? .pane(server, window, tag: tag) : .window(server, window, tag: tag)
+        }
+    }
+
+    func performConfirmedClose() {
+        guard let req = confirmClose else { return }
+        switch req {
+        case .plainTerminal(let t, _): PlainTerminalStore.shared.close(t)
+        case .window(let server, let window, _): server.close(window)
+        case .pane(let server, let window, _): server.killPane(window)
+        }
+        clearTag(forTag: req.tag)
+        confirmClose = nil
+    }
+
+    /// Blanks any tile currently showing `tag` (its window/terminal just closed),
+    /// instead of waiting for the next refresh to notice it's gone.
+    private func clearTag(forTag tag: String) {
+        guard let leafID = root.leaves.first(where: { $0.tag == tag })?.id else { return }
+        withAnimation(Self.spring) {
+            root = root.mapLeaf(leafID) { node in
+                if case .leaf(let id, _) = node { return .leaf(id: id, tag: nil) }
+                return node
+            }
+        }
+        save()
+    }
 
     /// Clicking anywhere inside a tile (text views and terminals included) focuses it.
     func installClickMonitor() {
