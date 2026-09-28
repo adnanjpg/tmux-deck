@@ -62,6 +62,10 @@ To update, `git pull` and run `./build-app.sh` again.
 | Previous / next window | ⌘[ / ⌘] |
 | Go to window 1–9 | ⌘1 … ⌘9 |
 
+## Staying up to date
+
+The app doesn't restart itself after `./build-app.sh` — whatever was open keeps running the build it launched with. It checks every 20 seconds (and whenever the window becomes active) whether the installed binary has changed, and shows a banner — **A newer build has been installed** — with a **Relaunch** button that opens the new build and quits the old one.
+
 ## How it works
 
 - Every remote call goes over one shared SSH connection (`ControlMaster`), so refreshes and button clicks are fast. Port forwards from your SSH config are skipped on that connection (`ClearAllForwardings`); when you turn on port forwarding for a server, a separate `ssh -N` connection runs them.

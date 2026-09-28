@@ -79,9 +79,22 @@ struct RootView: View {
     @EnvironmentObject private var app: AppModel
     @ObservedObject private var themes = ThemeManager.shared
     @ObservedObject private var plainStore = PlainTerminalStore.shared
+    @ObservedObject private var updateWatcher = UpdateWatcher.shared
 
     var body: some View {
         let theme = themes.theme
+        VStack(spacing: 0) {
+            UpdateBanner()
+            content
+        }
+        .environment(\.theme, theme)
+        .tint(theme.tint)
+        .foregroundStyle(theme.fg ?? Color.primary)
+        .preferredColorScheme(theme.isDark.map { $0 ? .dark : .light })
+        .animation(.snappy, value: updateWatcher.updateAvailable)
+    }
+
+    @ViewBuilder private var content: some View {
         Group {
             if let server = app.activeServer {
                 ContentView()
@@ -94,10 +107,6 @@ struct RootView: View {
                 AddServerView()
             }
         }
-        .environment(\.theme, theme)
-        .tint(theme.tint)
-        .foregroundStyle(theme.fg ?? Color.primary)
-        .preferredColorScheme(theme.isDark.map { $0 ? .dark : .light })
     }
 }
 
@@ -105,6 +114,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
+        _ = UpdateWatcher.shared
         // Make sure the main window can go full screen (green button, ⌃⌘F).
         NotificationCenter.default.addObserver(forName: NSWindow.didBecomeKeyNotification, object: nil, queue: .main) { note in
             (note.object as? NSWindow)?.collectionBehavior.insert(.fullScreenPrimary)
