@@ -8,6 +8,8 @@ struct TabInfo: Identifiable, Equatable {
     var subtitle: String
     var icon: String
     var stateColor: Color?
+    /// The pane to capture a thumbnail from (nil for a plain terminal, read locally instead).
+    var paneID: String?
     var id: String { tag }
 
     static func iconAndColor(for state: WindowState) -> (String, Color?) {
@@ -21,17 +23,22 @@ struct TabInfo: Identifiable, Equatable {
     }
 }
 
-/// One column in the switcher: a server (or "This Mac · terminals") and its open tabs.
+/// A section of the switcher: one tmux session on one server, or this Mac's plain terminals.
 struct TabGroup: Identifiable {
-    var label: String
+    var server: String
+    var session: String?
+    /// nil for the plain-terminals group; otherwise the server's ssh host.
+    var host: String?
     var items: [TabInfo]
-    var id: String { label }
+
+    var id: String { "\(host ?? "plain")|\(session ?? "")" }
+    var label: String { session.map { "\(server)  ›  \($0)" } ?? server }
 }
 
-/// A Windows-style Alt-Tab: hold ⌃ and tap ⇥ (or ⇧⇥) to step through every open
-/// window grouped by server, in a floating HUD; release ⌃ to switch to whichever
-/// is highlighted, or Esc to cancel without switching. The order is captured once
-/// when the HUD opens, so it doesn't reshuffle under you while you're cycling.
+/// A Windows-style task switcher: hold ⌃ and tap ⇥ (or ⇧⇥) to bring up a grid of every
+/// open window — grouped by server, then by tmux session — each showing a thumbnail of
+/// what's actually on its screen. Release ⌃ to switch, Esc to stay put; arrow keys and
+/// clicking work too. The list is captured when it opens, so nothing shuffles mid-cycle.
 @MainActor
 final class TabSwitcherController: ObservableObject {
     static let shared = TabSwitcherController()
@@ -39,25 +46,26 @@ final class TabSwitcherController: ObservableObject {
     @Published private(set) var visible = false
     @Published private(set) var groups: [TabGroup] = []
     @Published private(set) var highlightedTag: String?
-    /// The tab you were on when the switcher opened — "you are here".
+    /// Where the switch started from — "you are here".
     @Published private(set) var originTag: String?
-    /// Screen-text previews, one per tab, fetched lazily as you land on each one.
-    @Published private(set) var previews: [String: String] = [:]
-    @Published private(set) var previewsLoading: Set<String> = []
+    /// Each window's screen, as a picture, filled in as the captures come back.
+    @Published private(set) var thumbnails: [String: NSImage] = [:]
+    @Published private(set) var loadingThumbnails = true
 
     private var panel: NSPanel?
     private var monitorsInstalled = false
-    private var previewTasks: [String: Task<Void, Never>] = [:]
+    private var captureTasks: [Task<Void, Never>] = []
 
     private var flatTags: [String] { groups.flatMap { $0.items.map(\.tag) } }
 
-    /// ⌃⇥ / ⌃⇧⇥: open the HUD on the first press, or step the highlight on the next ones.
+    // MARK: Cycling
+
+    /// ⌃⇥ / ⌃⇧⇥: open the switcher on the first press, then step through it.
     func advance(_ delta: Int) {
         if !visible {
             let snapshot = AppModel.shared.groupedTabs()
             let flat = snapshot.flatMap { $0.items.map(\.tag) }
             guard flat.count > 1 else {
-                // Nothing to switch to — just cycle in place if there's exactly one, else no-op.
                 if let only = flat.first { LayoutModel.shared.show(only) }
                 return
             }
@@ -67,98 +75,165 @@ final class TabSwitcherController: ObservableObject {
             highlightedTag = flat[step(from: current ?? -1, by: delta, count: flat.count)]
             visible = true
             present()
+            captureThumbnails()
         } else {
             let tags = flatTags
             guard !tags.isEmpty else { return }
             let current = highlightedTag.flatMap { tags.firstIndex(of: $0) } ?? -1
             highlightedTag = tags[step(from: current, by: delta, count: tags.count)]
         }
-        loadPreview(for: highlightedTag)
     }
 
-    /// Fetches (and caches for this switcher session) what the highlighted tab's
-    /// screen currently shows: a live read for a plain terminal, a quick
-    /// `tmux capture-pane` for anything tmux-backed.
-    private func loadPreview(for tag: String?) {
-        guard let tag, previews[tag] == nil, previewTasks[tag] == nil else { return }
-        previewsLoading.insert(tag)
-        previewTasks[tag] = Task {
-            let text = await Self.fetchPreview(tag: tag)
-            self.previews[tag] = text
-            self.previewsLoading.remove(tag)
-            self.previewTasks[tag] = nil
-        }
+    /// ↑ / ↓ while it's open: jump to the next or previous session group.
+    func jumpGroup(_ delta: Int) {
+        guard visible, !groups.isEmpty,
+              let current = groups.firstIndex(where: { $0.items.contains { $0.tag == highlightedTag } })
+        else { return }
+        highlightedTag = groups[(current + delta + groups.count) % groups.count].items.first?.tag
     }
 
-    private static func fetchPreview(tag: String) async -> String {
-        if let t = PlainTerminalStore.shared.terminal(forTag: tag) {
-            let text = t.view.visibleScreenText()
-            return text.isEmpty ? "(nothing on screen yet)" : text
-        }
-        guard let (server, window) = TileResolver.resolve(tag) else { return "" }
-        let target = window.paneID.isEmpty ? window.windowTarget : window.paneID
-        let result = await server.remote.run("tmux capture-pane -p -t \(sq(target)) -S -16", timeout: 8)
-        guard result.ok else { return "(couldn't read this window)" }
-        let lines = stripANSI(result.stdout).split(separator: "\n", omittingEmptySubsequences: false)
-            .map { $0.trimmingCharacters(in: .whitespaces) }
-        let nonEmpty = lines.filter { !$0.isEmpty }
-        return nonEmpty.suffix(10).joined(separator: "\n")
-    }
+    func highlight(_ tag: String) { highlightedTag = tag }
 
     private func step(from index: Int, by delta: Int, count: Int) -> Int {
         let base = index == -1 ? (delta > 0 ? -1 : 0) : index
         return (base + delta + count) % count
     }
 
-    /// ⌃ released while the HUD is up: switch to the highlighted tab.
+    /// ⌃ released (or ↩, or a click): switch to the highlighted window.
     func commit() {
         guard visible, let tag = highlightedTag else { dismiss(); return }
         dismiss()
         LayoutModel.shared.show(tag)
     }
 
-    /// Esc while the HUD is up: close it, staying on whatever was already showing.
+    /// Esc: close the switcher and stay where you were.
     func cancel() { dismiss() }
 
     private func dismiss() {
         visible = false
         highlightedTag = nil
         originTag = nil
-        for task in previewTasks.values { task.cancel() }
-        previewTasks = [:]
-        previews = [:]
-        previewsLoading = []
+        thumbnails = [:]
+        for task in captureTasks { task.cancel() }
+        captureTasks = []
         panel?.close()
         panel = nil
     }
 
+    // MARK: Thumbnails
+
+    /// Captures every window's screen: one batched command per server (so ten windows on
+    /// one server is still a single round trip), plus a local read for plain terminals.
+    private func captureThumbnails() {
+        loadingThumbnails = true
+        let theme = ThemeManager.shared.theme
+        let background = theme.terminalBackground ?? .black
+        let foreground = theme.terminalForeground ?? .white
+
+        for group in groups where group.host == nil {
+            for item in group.items {
+                guard let terminal = PlainTerminalStore.shared.terminal(forTag: item.tag) else { continue }
+                let screen = AnsiScreen.parse(terminal.view.visibleScreenText(maxLines: 40))
+                if !screen.isEmpty {
+                    thumbnails[item.tag] = AnsiScreen.image(screen, background: background, foreground: foreground)
+                }
+            }
+        }
+
+        let byHost = Dictionary(grouping: groups.filter { $0.host != nil }, by: { $0.host! })
+        var pending = byHost.count
+        if pending == 0 { loadingThumbnails = false }
+        for (host, hostGroups) in byHost {
+            let items = hostGroups.flatMap(\.items).filter { $0.paneID != nil }
+            guard let server = AppModel.shared.server(host), !items.isEmpty else {
+                pending -= 1
+                if pending <= 0 { loadingThumbnails = false }
+                continue
+            }
+            let panes = items.compactMap(\.paneID)
+            let script = "for p in \(panes.joined(separator: " ")); do printf '@@P %s\\n' \"$p\"; "
+                + "tmux capture-pane -e -p -t \"$p\" 2>/dev/null; done"
+            let task = Task { [weak self] in
+                let result = await server.remote.run(script, timeout: 12)
+                guard let self, !Task.isCancelled, self.visible else { return }
+                let screens = Self.split(result.stdout)
+                for item in items {
+                    guard let paneID = item.paneID, let text = screens[paneID] else { continue }
+                    let screen = AnsiScreen.parse(text)
+                    if !screen.isEmpty {
+                        self.thumbnails[item.tag] = AnsiScreen.image(screen, background: background, foreground: foreground)
+                    }
+                }
+                pending -= 1
+                if pending <= 0 { self.loadingThumbnails = false }
+            }
+            captureTasks.append(task)
+        }
+    }
+
+    /// Splits a batched capture back into one screen per pane.
+    private static func split(_ output: String) -> [String: String] {
+        var screens: [String: String] = [:]
+        var pane: String?
+        var lines: [String] = []
+        func flush() {
+            if let pane { screens[pane] = lines.joined(separator: "\n") }
+            lines = []
+        }
+        for line in output.split(separator: "\n", omittingEmptySubsequences: false).map(String.init) {
+            if line.hasPrefix("@@P ") {
+                flush()
+                pane = line.dropFirst(4).trimmingCharacters(in: .whitespaces)
+            } else {
+                lines.append(line)
+            }
+        }
+        flush()
+        return screens
+    }
+
+    // MARK: The panel
+
     private func present() {
         let hosting = NSHostingView(rootView: TabSwitcherHUD().environmentObject(self))
-        let size = hosting.fittingSize
-        let panel = self.panel ?? NSPanel(
-            contentRect: NSRect(x: 0, y: 0, width: size.width, height: size.height),
-            styleMask: [.borderless, .nonactivatingPanel],
-            backing: .buffered, defer: false)
+        let screenFrame = (NSApp.keyWindow?.screen ?? NSScreen.main)?.visibleFrame
+            ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
+        let width = min(screenFrame.width * 0.86, 1240)
+        let size = NSSize(width: width, height: min(contentHeight(forWidth: width), screenFrame.height * 0.85))
+        let panel = NSPanel(contentRect: NSRect(origin: .zero, size: size),
+                            styleMask: [.borderless, .nonactivatingPanel],
+                            backing: .buffered, defer: false)
         panel.isOpaque = false
         panel.backgroundColor = .clear
         panel.hasShadow = true
         panel.level = .floating
         panel.isFloatingPanel = true
         panel.hidesOnDeactivate = true
-        panel.setContentSize(size)
         panel.contentView = hosting
-        if let screen = NSApp.keyWindow?.screen ?? NSScreen.main {
-            let f = screen.frame
-            panel.setFrameOrigin(NSPoint(x: f.midX - size.width / 2, y: f.midY - size.height / 2))
-        }
+        panel.setFrameOrigin(NSPoint(x: screenFrame.midX - size.width / 2,
+                                     y: screenFrame.midY - size.height / 2))
         panel.orderFrontRegardless()
         self.panel = panel
     }
 
-    // MARK: Key monitoring
+    /// Roughly how tall the grid wants to be, so the panel hugs its content
+    /// instead of always filling most of the screen.
+    private func contentHeight(forWidth width: CGFloat) -> CGFloat {
+        let columns = max(Int((width - 44 + 14) / (232 + 14)), 1)
+        var height: CGFloat = 22 * 2 + 44          // padding + the hint bar
+        for group in groups {
+            let rows = Int(ceil(Double(group.items.count) / Double(columns)))
+            height += 26                            // section header
+            height += CGFloat(rows) * (132 + 38) + CGFloat(max(rows - 1, 0)) * 14
+            height += 18                            // gap between sections
+        }
+        return max(height, 260)
+    }
 
-    /// Watches for ⌃ being released (commit) or Esc (cancel) while the HUD is showing.
-    /// Advancing itself happens through the ⌃⇥ / ⌃⇧⇥ menu commands, same as any shortcut.
+    // MARK: Keys
+
+    /// Watches for ⌃ coming back up (switch), Esc (cancel), ↩ and the arrow keys.
+    /// Stepping itself rides on the ⌃⇥ / ⌃⇧⇥ menu commands like any other shortcut.
     func installMonitors() {
         guard !monitorsInstalled else { return }
         monitorsInstalled = true
@@ -168,108 +243,127 @@ final class TabSwitcherController: ObservableObject {
                 self.commit()
                 return event
             }
-            if event.type == .keyDown, event.keyCode == 53 { // Esc
-                self.cancel()
-                return nil
+            if event.type == .keyDown {
+                switch event.keyCode {
+                case 53: self.cancel(); return nil                    // Esc
+                case 36, 76: self.commit(); return nil                // Return
+                case 123: self.advance(-1); return nil                // ←
+                case 124: self.advance(1); return nil                 // →
+                case 126: self.jumpGroup(-1); return nil              // ↑
+                case 125: self.jumpGroup(1); return nil               // ↓
+                default: break
+                }
             }
             return event
         }
     }
 }
 
-/// The floating switcher itself: columns of groups, each a stack of rows, the
-/// highlighted one picked out with an accent ring — same idea as Windows' grouped
-/// Alt-Tab or GNOME's window switcher.
+/// The switcher: a section per server and tmux session, each a grid of window thumbnails,
+/// with the one you came from marked and the highlighted one ringed.
 private struct TabSwitcherHUD: View {
     @EnvironmentObject private var controller: TabSwitcherController
     @Environment(\.theme) private var theme
 
+    private let thumbWidth: CGFloat = 232
+    private let thumbHeight: CGFloat = 132
+
     var body: some View {
-        HStack(alignment: .top, spacing: 16) {
-            HStack(alignment: .top, spacing: 18) {
-                ForEach(controller.groups) { group in
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text(group.label)
-                            .font(.caption.weight(.semibold))
+        ScrollViewReader { proxy in
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
+                    ForEach(controller.groups) { group in
+                        VStack(alignment: .leading, spacing: 8) {
+                            HStack(spacing: 6) {
+                                Image(systemName: group.host == nil ? "laptopcomputer" : "server.rack")
+                                    .font(.caption)
+                                Text(group.label).font(.callout.weight(.semibold))
+                                Text("\(group.items.count)")
+                                    .font(.caption2.monospacedDigit())
+                                    .padding(.horizontal, 5).padding(.vertical, 1)
+                                    .background(Capsule().fill(Color.secondary.opacity(0.15)))
+                            }
                             .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                        VStack(spacing: 3) {
-                            ForEach(group.items) { item in
-                                row(item)
+                            LazyVGrid(columns: [GridItem(.adaptive(minimum: thumbWidth), spacing: 14, alignment: .top)],
+                                      alignment: .leading, spacing: 14) {
+                                ForEach(group.items) { item in
+                                    card(item).id(item.tag)
+                                }
                             }
                         }
                     }
-                    .frame(width: 240, alignment: .leading)
                 }
+                .padding(22)
+                .padding(.bottom, 40)
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
-            Divider()
-            preview
+            .onChange(of: controller.highlightedTag) { _, tag in
+                if let tag { withAnimation(.easeOut(duration: 0.15)) { proxy.scrollTo(tag, anchor: .center) } }
+            }
         }
-        .padding(18)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
-        .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(theme.line))
-        .fixedSize()
+        .background(.regularMaterial)
+        .overlay(alignment: .bottom) { hint }
+        .clipShape(RoundedRectangle(cornerRadius: 18))
+        .overlay(RoundedRectangle(cornerRadius: 18).strokeBorder(theme.line))
     }
 
-    private func row(_ item: TabInfo) -> some View {
+    private var hint: some View {
+        Text("⌃⇥ next · ⌃⇧⇥ back · ↑↓ session · ↩ switch · esc cancel")
+            .font(.caption2)
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 12).padding(.vertical, 6)
+            .background(Capsule().fill(.regularMaterial))
+            .padding(.bottom, 8)
+    }
+
+    private func card(_ item: TabInfo) -> some View {
         let on = item.tag == controller.highlightedTag
         let here = item.tag == controller.originTag
-        return HStack(spacing: 8) {
-            Image(systemName: item.icon)
-                .foregroundStyle(item.stateColor ?? .secondary)
-                .frame(width: 16)
-            VStack(alignment: .leading, spacing: 0) {
-                Text(item.title).lineLimit(1).font(.callout)
-                Text(item.subtitle).lineLimit(1).font(.caption2).foregroundStyle(.secondary)
-            }
-            Spacer(minLength: 0)
-            if here {
-                Text("current")
-                    .font(.caption2.weight(.semibold))
-                    .foregroundStyle(.secondary)
-                    .padding(.horizontal, 6).padding(.vertical, 2)
-                    .background(Capsule().fill(Color.secondary.opacity(0.15)))
-            }
-        }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 5)
-        .background(RoundedRectangle(cornerRadius: 7).fill(on ? theme.tint.opacity(0.18) : Color.clear))
-        .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(on ? theme.tint : (here ? theme.line : Color.clear), lineWidth: on ? 1.5 : 1))
-    }
-
-    /// A live look at whatever the highlighted tab's screen currently shows —
-    /// the same idea as the big thumbnail in Windows' Alt-Tab, done as text
-    /// since our "windows" are chat and terminal content, not window surfaces.
-    @ViewBuilder private var preview: some View {
-        let tag = controller.highlightedTag
-        let item = controller.groups.flatMap(\.items).first { $0.tag == tag }
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 6) {
-                if let item {
-                    Image(systemName: item.icon).foregroundStyle(item.stateColor ?? .secondary)
-                    Text(item.title).font(.callout.weight(.semibold)).lineLimit(1)
-                }
-                Spacer()
-                if tag != nil && tag == controller.originTag {
-                    Text("current").font(.caption2).foregroundStyle(.secondary)
-                }
-            }
-            ScrollView {
-                Text((tag.flatMap { controller.previews[$0] }?.isEmpty == false ? controller.previews[tag!]! : " "))
-                    .font(.system(size: 11, design: .monospaced))
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, alignment: .topLeading)
-                    .textSelection(.disabled)
-            }
-            .frame(maxHeight: .infinity)
-            .overlay {
-                if let tag, controller.previewsLoading.contains(tag) {
+        return VStack(alignment: .leading, spacing: 6) {
+            ZStack {
+                Rectangle().fill(Color(nsColor: theme.terminalBackground ?? .black))
+                if let image = controller.thumbnails[item.tag] {
+                    Image(nsImage: image)
+                        .resizable()
+                        .interpolation(.medium)
+                        .aspectRatio(contentMode: .fill)
+                        .frame(width: thumbWidth, height: thumbHeight, alignment: .topLeading)
+                        .clipped()
+                } else if controller.loadingThumbnails {
                     ProgressView().controlSize(.small)
+                } else {
+                    Image(systemName: item.icon).font(.title2).foregroundStyle(.secondary)
                 }
             }
+            .frame(width: thumbWidth, height: thumbHeight)
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+            .overlay(RoundedRectangle(cornerRadius: 8)
+                .strokeBorder(on ? theme.tint : Color.secondary.opacity(0.3), lineWidth: on ? 3 : 1))
+            .overlay(alignment: .topTrailing) {
+                if here {
+                    Text("current")
+                        .font(.caption2.weight(.semibold))
+                        .padding(.horizontal, 6).padding(.vertical, 2)
+                        .background(Capsule().fill(.regularMaterial))
+                        .padding(6)
+                }
+            }
+
+            HStack(spacing: 6) {
+                Image(systemName: item.icon)
+                    .font(.caption)
+                    .foregroundStyle(item.stateColor ?? .secondary)
+                VStack(alignment: .leading, spacing: 0) {
+                    Text(item.title).font(.callout).lineLimit(1)
+                    Text(item.subtitle).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                }
+                Spacer(minLength: 0)
+            }
+            .frame(width: thumbWidth, alignment: .leading)
         }
-        .padding(10)
-        .frame(width: 340, height: 260, alignment: .topLeading)
-        .background(RoundedRectangle(cornerRadius: 10).fill(Color.black.opacity(0.05)))
+        .padding(6)
+        .background(RoundedRectangle(cornerRadius: 12).fill(on ? theme.tint.opacity(0.16) : Color.clear))
+        .contentShape(Rectangle())
+        .onTapGesture { controller.highlight(item.tag); controller.commit() }
     }
 }

@@ -112,27 +112,33 @@ final class AppModel: ObservableObject {
 
     // MARK: Tab switching (⌃⇥ / ⌃⇧⇥ — see TabSwitcher.swift)
 
-    /// Every open item, grouped the same way the sidebar groups them: this
-    /// Mac's plain terminals first, then each server's windows (not their
-    /// individual panes — one entry per window, same granularity as a browser tab).
+    /// Every open window, grouped the way the sidebar groups them: this Mac's plain
+    /// terminals first, then one section per tmux session per server. Panes aren't
+    /// listed separately — one entry per window, the same granularity as a browser tab.
     func groupedTabs() -> [TabGroup] {
         var groups: [TabGroup] = []
         let plainTerminals = PlainTerminalStore.shared.terminals
         if !plainTerminals.isEmpty {
-            groups.append(TabGroup(label: "This Mac · terminals", items: plainTerminals.map { t in
-                TabInfo(tag: t.tag, title: t.title, subtitle: t.running ? (t.kind == .claude ? "Claude" : "Terminal") : "Ended",
-                       icon: t.kind == .claude ? "sparkle" : "terminal", stateColor: nil)
+            groups.append(TabGroup(server: "This Mac · terminals", session: nil, host: nil,
+                                   items: plainTerminals.map { t in
+                TabInfo(tag: t.tag, title: t.title,
+                        subtitle: t.running ? (t.kind == .claude ? "Claude" : "Terminal") : "Ended",
+                        icon: t.kind == .claude ? "sparkle" : "terminal", stateColor: nil, paneID: nil)
             }))
         }
         for server in servers {
-            let items = server.sessions.flatMap { session in
-                session.windows.map { w -> TabInfo in
+            for session in server.sessions {
+                let items = session.windows.map { w -> TabInfo in
                     let (icon, color) = TabInfo.iconAndColor(for: w.state)
                     return TabInfo(tag: "\(server.host)#\(w.id)", title: server.displayTitle(w),
-                                   subtitle: "\(session.name) · \(w.state.label)", icon: icon, stateColor: color)
+                                   subtitle: w.state.label, icon: icon, stateColor: color,
+                                   paneID: w.paneID.isEmpty ? nil : w.paneID)
+                }
+                if !items.isEmpty {
+                    groups.append(TabGroup(server: server.displayName, session: session.name,
+                                           host: server.host, items: items))
                 }
             }
-            if !items.isEmpty { groups.append(TabGroup(label: server.displayName, items: items)) }
         }
         return groups
     }
