@@ -25,6 +25,14 @@ struct TmuxDeckApp: App {
                     .keyboardShortcut("n")
                 Button("New terminal window") { model?.newWindow(claude: false) }
                     .keyboardShortcut("t")
+                Divider()
+                Button("New Mac terminal (no tmux)") {
+                    LayoutModel.shared.show(PlainTerminalStore.shared.new(.shell).tag)
+                }
+                .keyboardShortcut("t", modifiers: [.command, .shift])
+                Button("New Claude on this Mac (no tmux)") {
+                    LayoutModel.shared.show(PlainTerminalStore.shared.new(.claude).tag)
+                }
             }
             CommandGroup(after: .sidebar) {
                 Button("Choose Theme…") { NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil) }
@@ -70,6 +78,7 @@ struct TmuxDeckApp: App {
 struct RootView: View {
     @EnvironmentObject private var app: AppModel
     @ObservedObject private var themes = ThemeManager.shared
+    @ObservedObject private var plainStore = PlainTerminalStore.shared
 
     var body: some View {
         let theme = themes.theme
@@ -77,6 +86,10 @@ struct RootView: View {
             if let server = app.activeServer {
                 ContentView()
                     .environmentObject(server)
+            } else if plainStore.enabled {
+                // Plain terminals only: the tmux menus act on a stand-in for this Mac.
+                ContentView()
+                    .environmentObject(app.localStandIn)
             } else {
                 AddServerView()
             }
@@ -105,7 +118,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
-        MainActor.assumeIsolated { AppModel.shared.stopAll() }
+        MainActor.assumeIsolated {
+            AppModel.shared.stopAll()
+            PlainTerminalStore.shared.stopAll()
+        }
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }

@@ -449,12 +449,16 @@ private struct TileHeader: View {
 
     var body: some View {
         let resolved = tag.flatMap(TileResolver.resolve)
+        let plainTerm = tag.flatMap { PlainTerminalStore.shared.terminal(forTag: $0) }
         HStack(spacing: 6) {
             Image(systemName: "line.3.horizontal")
                 .font(.caption)
                 .foregroundStyle(.tertiary)
                 .help("Drag to move this tile")
-            if let (server, window) = resolved {
+            if let t = plainTerm {
+                Text(t.title).font(.callout.weight(focused ? .semibold : .regular)).lineLimit(1)
+                Text("This Mac").font(.caption).foregroundStyle(.secondary)
+            } else if let (server, window) = resolved {
                 Text(server.displayTitle(window))
                     .font(.callout.weight(focused ? .semibold : .regular))
                     .lineLimit(1)
@@ -482,7 +486,7 @@ private struct TileHeader: View {
         .contentShape(Rectangle())
         .onTapGesture { layout.focus(leafID) }
         .draggable("tile:\(leafID)") {
-            Label(resolved.map { $0.0.displayTitle($0.1) } ?? "Tile", systemImage: "rectangle.on.rectangle")
+            Label(plainTerm?.title ?? resolved.map { $0.0.displayTitle($0.1) } ?? "Tile", systemImage: "rectangle.on.rectangle")
                 .padding(8)
                 .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
         }

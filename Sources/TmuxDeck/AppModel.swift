@@ -14,6 +14,8 @@ final class AppModel: ObservableObject {
     @Published private(set) var forwarders: [String: PortForwarder] = [:]
 
     private var observers: [String: AnyCancellable] = [:]
+    /// Used when you only have plain terminals (no tmux servers) so the window still has a model.
+    lazy var localStandIn = TmuxModel(host: Remote.localHost)
 
     var activeServer: TmuxModel? {
         servers.first { $0.host == activeHost } ?? servers.first
@@ -99,7 +101,8 @@ final class AppModel: ObservableObject {
     }
 
     func select(tag: String?) {
-        guard let tag, let hash = tag.firstIndex(of: "#") else { return }
+        // Plain terminals aren't tmux servers; nothing to select server-side.
+        guard let tag, !tag.hasPrefix("plain#"), let hash = tag.firstIndex(of: "#") else { return }
         let host = String(tag[..<hash])
         let id = String(tag[tag.index(after: hash)...])
         activate(host)

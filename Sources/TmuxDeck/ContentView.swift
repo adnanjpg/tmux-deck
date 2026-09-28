@@ -12,6 +12,8 @@ struct ContentView: View {
     @State private var movingToNewSession: TmuxWindow?
     @State private var addingServer = false
     @State private var restoring: TmuxModel?
+    @ObservedObject private var plain = PlainTerminalStore.shared
+    @State private var renamingPlain: PlainTerminal?
     @AppStorage("showPRs") private var showPRs = false
     /// Collapsed sidebar groups: "host" for a server, "host#session" for a session.
     @AppStorage("collapsedGroups") private var collapsedStore = ""
@@ -51,6 +53,11 @@ struct ContentView: View {
             }
             .sheet(isPresented: $addingServer) { AddServerView(sheet: true) }
             .sheet(item: $restoring) { server in RestoreView(server: server) }
+            .alert("Rename terminal", isPresented: Binding(get: { renamingPlain != nil }, set: { if !$0 { renamingPlain = nil } })) {
+                TextField("Name", text: $renameText)
+                Button("Rename") { if let t = renamingPlain { plain.rename(t, to: renameText) } }
+                Button("Cancel", role: .cancel) {}
+            }
     }
 
     private var main: some View {
@@ -122,6 +129,43 @@ struct ContentView: View {
     private var sidebar: some View {
         List(selection: Binding(get: { layout.focusedTag ?? app.selectionTag },
                                 set: { if let t = $0 { layout.show(t) } })) {
+            if plain.enabled || !plain.terminals.isEmpty {
+                Section(isExpanded: isExpanded("plain")) {
+                    ForEach(plain.terminals) { t in
+                        PlainTerminalRow(terminal: t)
+                            .tag(t.tag)
+                            .draggable(t.tag)
+                            .contextMenu {
+                                Button("Open to the right") { layout.drop(tag: t.tag, onto: layout.focused, zone: .right) }
+                                Button("Open below") { layout.drop(tag: t.tag, onto: layout.focused, zone: .bottom) }
+                                Divider()
+                                Button("Rename…") { renameText = t.title; renamingPlain = t }
+                                Divider()
+                                Button("Close terminal", role: .destructive) { plain.close(t) }
+                            }
+                    }
+                    if plain.terminals.isEmpty {
+                        Button("New terminal") { openPlain(.shell) }.buttonStyle(.link).selectionDisabled()
+                    }
+                } header: {
+                    HStack {
+                        Image(systemName: "laptopcomputer").foregroundStyle(.secondary)
+                        Text("This Mac · terminals").font(.headline).foregroundStyle(.primary)
+                        Spacer()
+                        Menu {
+                            Button("New terminal") { openPlain(.shell) }
+                            Button("New Claude") { openPlain(.claude) }
+                            Divider()
+                            Button("Hide this section") { plain.enabled = false }
+                                .disabled(!plain.terminals.isEmpty)
+                        } label: { Image(systemName: "plus.circle") }
+                        .menuStyle(.borderlessButton)
+                        .menuIndicator(.hidden)
+                        .fixedSize()
+                        .help("New plain terminal on this Mac (no tmux)")
+                    }
+                }
+            }
             ForEach(app.servers) { server in
                 Section(isExpanded: isExpanded(server.host)) {
                     serverRows(server)
@@ -218,6 +262,12 @@ struct ContentView: View {
         }
     }
 
+    /// Opens a new plain terminal (or Claude) on this Mac and shows it.
+    private func openPlain(_ kind: PlainTerminal.Kind) {
+        let t = plain.new(kind)
+        layout.show(t.tag)
+    }
+
     /// What a collapsed session still tells you: how many windows, and whether any need you.
     @ViewBuilder private func collapsedSummary(_ session: TmuxSession) -> some View {
         let states = session.windows.flatMap { [$0] + $0.paneItems }.map(\.state)
@@ -302,6 +352,8 @@ struct ContentView: View {
             Spacer()
             Menu {
                 Button("Add server…") { addingServer = true }
+                Button("New Mac terminal (no tmux)") { openPlain(.shell) }
+                Button("New Claude on this Mac (no tmux)") { openPlain(.claude) }
                 Button("New session on \(model.displayName)…") { target = model; renameText = ""; newSessionPrompt = true }
             } label: {
                 Image(systemName: "plus")
@@ -345,7 +397,13 @@ struct ContentView: View {
     }
 
     @ViewBuilder private func tileContent(leafID: String, tag: String?) -> some View {
-        if let tag, let (server, window) = TileResolver.resolve(tag) {
+        if let tag, tag.hasPrefix("plain#") {
+            if let t = plain.terminal(forTag: tag) {
+                PlainTerminalView(terminal: t).id(t.id)
+            } else {
+                ContentUnavailableView("Terminal closed", systemImage: "xmark.rectangle")
+            }
+        } else if let tag, let (server, window) = TileResolver.resolve(tag) {
             windowContent(server: server, window: window, terminalAllowed: terminalOwner(for: tag) == leafID)
                 .environmentObject(server)
         } else if let tag, let hash = tag.firstIndex(of: "#"),
@@ -534,13 +592,26 @@ struct AddServerView: View {
                 .frame(maxWidth: 420)
             if !app.servers.contains(where: { $0.host == Remote.localHost }) {
                 Button { draft = Remote.localHost; connect() } label: {
-                    Label("This Mac — local tmux, no SSH", systemImage: "laptopcomputer")
+                    Label("This Mac — tmux sessions, no SSH", systemImage: "laptopcomputer")
                         .frame(maxWidth: 300)
                 }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.large)
                 .help("Run tmux and Claude sessions on this Mac")
                 Text("or a server over SSH:").font(.caption).foregroundStyle(.secondary)
+            }
+            if !PlainTerminalStore.shared.enabled {
+                Button {
+                    let t = PlainTerminalStore.shared.new(.shell)
+                    LayoutModel.shared.show(t.tag)
+                    if sheet { dismiss() }
+                } label: {
+                    Label("This Mac — plain terminals, no tmux", systemImage: "terminal")
+                        .frame(maxWidth: 300)
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.large)
+                .help("Normal terminals running directly in the app, like Terminal.app tabs")
             }
             let available = configured.filter { h in !app.servers.contains { $0.host == h } }
             if !available.isEmpty {

@@ -34,19 +34,7 @@ final class TerminalController: NSObject, LocalProcessTerminalViewDelegate {
     }
 
     func applyColors() {
-        let theme = ThemeManager.shared.theme
-        let dark = theme.isDark ?? (NSApp.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua)
-        view.nativeBackgroundColor = theme.terminalBackground ?? (dark ? NSColor(white: 0.11, alpha: 1) : NSColor(white: 0.995, alpha: 1))
-        view.nativeForegroundColor = theme.terminalForeground ?? (dark ? NSColor(white: 0.9, alpha: 1) : NSColor(white: 0.12, alpha: 1))
-        view.caretColor = theme.terminalCursor ?? theme.accent
-        view.selectedTextBackgroundColor = theme.terminalSelection ?? NSColor.selectedTextBackgroundColor
-        if let ansi = theme.ansi {
-            view.installColors(ansi.map { c in
-                let rgb = c.usingColorSpace(.sRGB) ?? c
-                return SwiftTerm.Color(red: UInt16(rgb.redComponent * 65535), green: UInt16(rgb.greenComponent * 65535),
-                                       blue: UInt16(rgb.blueComponent * 65535))
-            })
-        }
+        applyTerminalTheme(to: view)
     }
 
     /// Connects if needed and brings `windowID` to the front.
@@ -135,6 +123,3 @@ final class TerminalController: NSObject, LocalProcessTerminalViewDelegate {
     }
 }
 
-private extension Double {
-    var nonZero: Double? { self == 0 ? nil : self }
-}
