@@ -1,12 +1,15 @@
 import SwiftUI
 
-/// A Claude window shown as a normal Mac chat: your messages, Claude's replies,
-/// and the tools it used. Claude keeps running in tmux; this just reads its log.
+/// An assistant's window shown as a normal Mac chat: your messages, its replies, and the tools
+/// it used. The assistant keeps running in tmux; this just reads its log.
+///
+/// With no `window` it's a finished conversation opened from history: the same rendering, with
+/// nothing you could type into, since there's no process left to type at.
 struct ChatView: View {
     @Environment(\.fonts) private var fonts
     @Environment(\.theme) private var theme
     @EnvironmentObject private var model: TmuxModel
-    let window: TmuxWindow
+    var window: TmuxWindow?
     @ObservedObject var store: ChatStore
     /// How many of the latest turns are rendered; older ones load on request.
     @State private var visibleTurns = 25
@@ -33,15 +36,20 @@ struct ChatView: View {
                     ForEach(all.suffix(visibleTurns)) { turn in
                         TurnView(turn: turn, store: store)
                     }
-                    ForEach(Array(store.queued.enumerated()), id: \.offset) { _, text in
-                        QueuedMessage(text: text)
+                    // A finished conversation's leftover queue records are history, not a queue.
+                    if window != nil {
+                        ForEach(Array(store.queued.enumerated()), id: \.offset) { _, text in
+                            QueuedMessage(text: text)
+                        }
                     }
-                    ForEach(store.sending) { pending in
-                        SendingMessage(message: pending, window: window, store: store)
+                    if let window {
+                        ForEach(store.sending) { pending in
+                            SendingMessage(message: pending, window: window, store: store)
+                        }
                     }
-                    if let activity = model.activities[window.id] {
+                    if let window, let activity = model.activities[window.id] {
                         ActivityView(activity: activity, working: window.state == .claudeWorking)
-                    } else if window.state == .claudeWorking {
+                    } else if window?.state == .claudeWorking {
                         HStack(spacing: 8) {
                             ProgressView().controlSize(.small)
                             Text("\(store.assistant.displayName) is working…").foregroundStyle(.secondary)
@@ -88,27 +96,34 @@ struct ChatView: View {
                 if !store.loaded && store.items.isEmpty {
                     ProgressView("Loading conversation…")
                 } else if store.items.isEmpty && store.sending.isEmpty {
-                    ContentUnavailableView("New conversation", systemImage: "sparkle",
-                                           description: Text("Send \(store.assistant.displayName) a message to get started."))
+                    ContentUnavailableView(window == nil ? "Nothing in this conversation" : "New conversation",
+                                           systemImage: "sparkle",
+                                           description: Text(window == nil
+                                                             ? "Its log has no messages left to read."
+                                                             : "Send \(store.assistant.displayName) a message to get started."))
                 }
             }
             }
-            Divider()
-            VStack(spacing: 0) {
-                ComposeBar(window: window)
-                    .id(window.id)
-                // The chips act by typing Claude's own commands (/model, /effort, Shift+Tab
-                // mode cycling), which mean nothing to Codex — and its screen doesn't carry
-                // Claude's status line to read in the first place.
-                if store.assistant == .claude { StatusBar(window: window) }
+            if let window {
+                Divider()
+                VStack(spacing: 0) {
+                    ComposeBar(window: window)
+                        .id(window.id)
+                    // The chips act by typing Claude's own commands (/model, /effort, Shift+Tab
+                    // mode cycling), which mean nothing to Codex — and its screen doesn't carry
+                    // Claude's status line to read in the first place.
+                    if store.assistant == .claude { StatusBar(window: window) }
+                }
+                .background(theme.panel)
             }
-            .background(theme.panel)
         }
         .background(theme.bg)
         .task(id: store.sessionID) {
             await store.catchUp()
+            // A finished conversation isn't going to change, so read it once.
+            guard window != nil else { return }
             while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(window.state == .claudeWorking ? 1 : 2))
+                try? await Task.sleep(for: .seconds(window?.state == .claudeWorking ? 1 : 2))
                 await store.poll()
             }
         }
@@ -122,7 +137,12 @@ extension ChatView {
         let ids = turns.flatMap { $0.cardIDs }
         let allCollapsed = !ids.isEmpty && ids.allSatisfy(store.collapsed.contains)
         return HStack(spacing: 10) {
-            StateBadge(state: window.state, done: model.unseenDone.contains(window.id))
+            if let window {
+                StateBadge(state: window.state, done: model.unseenDone.contains(window.id))
+            } else {
+                Label("Finished", systemImage: "clock.arrow.circlepath")
+                    .font(fonts.caption).foregroundStyle(.secondary)
+            }
             Text("\(turns.count) \(turns.count == 1 ? "turn" : "turns")")
                 .font(fonts.caption)
                 .foregroundStyle(.secondary)

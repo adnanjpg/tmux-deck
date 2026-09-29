@@ -47,6 +47,8 @@ struct TmuxDeckApp: App {
                     .keyboardShortcut("e", modifiers: [.command, .shift])
                 Button("Changes") { model?.showChangesForFocused() }
                     .keyboardShortcut("g", modifiers: [.command, .shift])
+                Button("Past Conversations…") { NotificationCenter.default.post(name: .openHistory, object: nil) }
+                    .keyboardShortcut("o", modifiers: [.command, .shift])
                 Divider()
                 Button("Zoom In") { Zoom.shared.zoomIn() }
                     .keyboardShortcut("+", modifiers: [.command])

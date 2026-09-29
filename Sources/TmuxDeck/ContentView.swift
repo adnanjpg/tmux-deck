@@ -12,6 +12,7 @@ struct ContentView: View {
     @State private var movingToNewSession: TmuxWindow?
     @State private var addingServer = false
     @State private var restoring: TmuxModel?
+    @State private var browsingHistory: TmuxModel?
     @ObservedObject private var plain = PlainTerminalStore.shared
     @State private var renamingPlain: PlainTerminal?
     @AppStorage("showPRs") private var showPRs = false
@@ -68,6 +69,17 @@ struct ContentView: View {
             }
             .sheet(isPresented: $addingServer) { AddServerView(sheet: true) }
             .sheet(item: $restoring) { server in RestoreView(server: server) }
+            .sheet(item: $browsingHistory) { server in
+                HistoryView(host: server.host, store: HistoryStores.shared.store(for: server.host))
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .openHistory)) { _ in
+                // ⇧⌘O: the server of whatever tile is focused, else the active one.
+                if let tag = layout.focusedTag, let (server, _) = TileResolver.resolve(tag) {
+                    browsingHistory = server
+                } else {
+                    browsingHistory = app.activeServer
+                }
+            }
             .alert("Rename terminal", isPresented: Binding(get: { renamingPlain != nil }, set: { if !$0 { renamingPlain = nil } })) {
                 TextField("Name", text: $renameText)
                 Button("Rename") { if let t = renamingPlain { plain.rename(t, to: renameText) } }
@@ -211,6 +223,7 @@ struct ContentView: View {
                                  onNewSession: { target = server; renameText = ""; newSessionPrompt = true },
                                  onRemove: { app.removeServer(server.host) },
                                  onRestore: { restoring = server },
+                                 onHistory: { browsingHistory = server },
                                  onCollapseSessions: { collapse in
                                      for sess in server.sessions { setExpanded("\(server.host)#\(sess.name)", !collapse) }
                                  })
@@ -229,6 +242,8 @@ struct ContentView: View {
             if server.connected {
                 VStack(alignment: .leading, spacing: 6) {
                     Button("Restore previous sessions…") { restoring = server }
+                        .buttonStyle(.link)
+                    Button("Past conversations…") { browsingHistory = server }
                         .buttonStyle(.link)
                     Button("Create a session") { target = server; renameText = "main"; newSessionPrompt = true }
                         .buttonStyle(.link)
@@ -440,6 +455,10 @@ struct ContentView: View {
     @ViewBuilder private func tileContent(leafID: String, tag: String?) -> some View {
         if let tag, let file = FileTile.resolve(tag) {
             FileEditorView(host: file.host, path: file.path).id(tag)
+        } else if let tag, let past = PastTile.resolve(tag) {
+            PastChatView(host: past.host, assistant: past.assistant,
+                         sessionID: past.id, path: past.path)
+                .id(tag)
         } else if let tag, let diff = DiffTile.resolve(tag) {
             DiffView(host: diff.host, path: diff.path,
                      store: DiffStores.shared.store(host: diff.host, path: diff.path))
@@ -744,6 +763,7 @@ struct ServerHeader: View {
     var onNewSession: () -> Void
     var onRemove: () -> Void
     var onRestore: () -> Void = {}
+    var onHistory: () -> Void = {}
     var onCollapseSessions: (Bool) -> Void = { _ in }
     @State private var showingPorts = false
     @State private var confirmRemove = false
@@ -768,6 +788,7 @@ struct ServerHeader: View {
             Spacer()
             Menu {
                 Button("New session…", action: onNewSession)
+                Button("Past conversations…", action: onHistory)
                 Button("Restore previous windows…", action: onRestore)
                 Button("Collapse all sessions") { withAnimation(.snappy) { onCollapseSessions(true) } }
                 Button("Expand all sessions") { withAnimation(.snappy) { onCollapseSessions(false) } }
