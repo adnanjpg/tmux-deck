@@ -191,7 +191,12 @@ final class TmuxModel: ObservableObject, Identifiable {
     /// The host answered, but there's no tmux server running on it.
     @Published private(set) var noTmuxServer = false
     /// Unsent text in each window's message box.
-    var drafts: [String: String] = [:]
+    /// Unsent text per window, kept across quits — losing a half-written message because you
+    /// closed the app is the kind of small betrayal you remember.
+    var drafts: [String: String] {
+        get { UserDefaults.standard.dictionary(forKey: "drafts.\(host)") as? [String: String] ?? [:] }
+        set { UserDefaults.standard.set(newValue, forKey: "drafts.\(host)") }
+    }
 
     private(set) var needsYouCount = 0
     private var lastClaude: [String: (ClaudeSessionInfo, Date)] = [:]
@@ -1317,7 +1322,30 @@ for pane, pid, path in panes:
     func rename(_ w: TmuxWindow, to name: String) {
         let name = name.trimmingCharacters(in: .whitespaces)
         guard !name.isEmpty else { return }
-        Task { _ = await tmux("tmux rename-window -t \(sq(w.windowTarget)) \(sq(name))") }
+        // automatic-rename is on by default and would put the command's name back; turning it
+        // off for this window is what makes a name you chose stick.
+        Task {
+            _ = await tmux("tmux rename-window -t \(sq(w.windowTarget)) \(sq(name))"
+                + " \\; set-window-option -t \(sq(w.windowTarget)) automatic-rename off")
+        }
+    }
+
+    // MARK: Pinning
+
+    private var pinKey: String { "pinned.\(host)" }
+
+    var pinned: Set<String> {
+        get { Set(UserDefaults.standard.array(forKey: pinKey) as? [String] ?? []) }
+        set { UserDefaults.standard.set(Array(newValue), forKey: pinKey) }
+    }
+
+    func isPinned(_ w: TmuxWindow) -> Bool { pinned.contains(w.id) }
+
+    func togglePinned(_ w: TmuxWindow) {
+        var all = pinned
+        if all.contains(w.id) { all.remove(w.id) } else { all.insert(w.id) }
+        pinned = all
+        objectWillChange.send()
     }
 
     func close(_ w: TmuxWindow) {

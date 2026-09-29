@@ -13,6 +13,8 @@ struct ContentView: View {
     @State private var addingServer = false
     @State private var restoring: TmuxModel?
     @State private var browsingHistory: TmuxModel?
+    @State private var sidebarFilter = ""
+    @FocusState private var filterFocused: Bool
     @ObservedObject private var plain = PlainTerminalStore.shared
     @State private var renamingPlain: PlainTerminal?
     @AppStorage("showPRs") private var showPRs = false
@@ -238,7 +240,44 @@ struct ContentView: View {
         .listStyle(.sidebar)
         .scrollContentBackground(theme.sidebar == nil ? .automatic : .hidden)
         .background { if let s = theme.sidebar { Color(nsColor: s) } }
+        .safeAreaInset(edge: .top, spacing: 0) { sidebarSearch }
         .safeAreaInset(edge: .bottom) { statusBar }
+    }
+
+    private var sidebarSearch: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "magnifyingglass").font(.caption).foregroundStyle(.tertiary)
+            TextField("Filter windows", text: $sidebarFilter)
+                .textFieldStyle(.plain)
+                .font(.callout)
+                .focused($filterFocused)
+            if !sidebarFilter.isEmpty {
+                Button { sidebarFilter = "" } label: {
+                    Image(systemName: "xmark.circle.fill").foregroundStyle(.tertiary)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(.regularMaterial)
+        .overlay(alignment: .bottom) { Divider() }
+    }
+
+    /// Windows matching the sidebar filter, pinned ones first.
+    private func visibleWindows(_ server: TmuxModel, _ windows: [TmuxWindow]) -> [TmuxWindow] {
+        let query = sidebarFilter.trimmingCharacters(in: .whitespaces)
+        let matching = query.isEmpty ? windows : windows.filter {
+            server.displayTitle($0).localizedCaseInsensitiveContains(query)
+                || $0.folder.localizedCaseInsensitiveContains(query)
+                || $0.session.localizedCaseInsensitiveContains(query)
+                || $0.command.localizedCaseInsensitiveContains(query)
+        }
+        let pinned = server.pinned
+        return matching.sorted { a, b in
+            let pa = pinned.contains(a.id), pb = pinned.contains(b.id)
+            return pa == pb ? false : pa
+        }
     }
 
     @ViewBuilder private func serverRows(_ server: TmuxModel) -> some View {
@@ -314,8 +353,10 @@ struct ContentView: View {
             .dropDestination(for: String.self) { ids, _ in
                 server.handleDrop(ids, onto: nil, session: session.name)
             }
-            ForEach(open ? session.windows : []) { window in
-                WindowRow(window: window, title: server.displayTitle(window), done: server.unseenDone.contains(window.id))
+            ForEach(open ? visibleWindows(server, session.windows) : []) { window in
+                WindowRow(window: window, title: server.displayTitle(window),
+                          done: server.unseenDone.contains(window.id),
+                          pinned: server.isPinned(window))
                     .tag(tag(window.id))
                     .contextMenu { windowMenu(window, server) }
                     .draggable("\(server.host)#\(window.id)")
@@ -361,6 +402,9 @@ struct ContentView: View {
         Toggle("Notify me about this window", isOn: Binding(
             get: { !Notifications.windowMuted(host: m.host, window: window.id) },
             set: { Notifications.setWindowMuted(host: m.host, window: window.id, !$0) }))
+        Toggle("Pin to the top", isOn: Binding(
+            get: { m.isPinned(window) },
+            set: { _ in m.togglePinned(window) }))
         Divider()
         Button("Rename…") { target = m; renameText = window.title; renaming = .window(window) }
         Divider()
@@ -609,14 +653,21 @@ struct WindowRow: View {
     let title: String
     var compact = false
     var done = false
+    var pinned = false
 
     var body: some View {
         HStack(spacing: 8) {
             icon
                 .frame(width: 18)
             VStack(alignment: .leading, spacing: 1) {
-                Text(title)
-                    .lineLimit(1)
+                HStack(spacing: 4) {
+                    if pinned {
+                        Image(systemName: "pin.fill").font(.system(size: 8))
+                            .foregroundStyle(.tertiary)
+                            .help("Pinned to the top")
+                    }
+                    Text(title).lineLimit(1)
+                }
                 Text(subtitle)
                     .font(.caption)
                     .foregroundStyle(subtitleColor)
