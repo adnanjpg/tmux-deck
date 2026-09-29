@@ -85,6 +85,19 @@ The app doesn't restart itself after `./build-app.sh` — whatever was open keep
 - Claude's status and permission choices are read from its screen and session record, so a future Claude Code release could need small fixes.
 - If you type into Claude from somewhere else, the half-typed text doesn't appear in the app's box. Sent messages always show up.
 
+## Working on the code
+
+Start with [CLAUDE.md](CLAUDE.md) — build commands, the architecture in one page, the house rules,
+and the gotchas that cost real debugging time. Deeper notes live in [`docs/`](docs/):
+
+| Doc | What's in it |
+|---|---|
+| [docs/architecture.md](docs/architecture.md) | File-by-file map, tag format, split-layout tree, persisted state |
+| [docs/claude-code-integration.md](docs/claude-code-integration.md) | Claude Code's session records and transcript format, screen scraping, how messages are sent reliably |
+| [docs/tmux.md](docs/tmux.md) | tmux view sessions, targeting, pane zoom, capturing screens, portable remote shell |
+| [docs/appkit-and-swiftterm.md](docs/appkit-and-swiftterm.md) | `acceptsFirstMouse`, the vendored SwiftTerm patch, the switcher panel, themes |
+| [docs/testing.md](docs/testing.md) | How to verify a change, and how to test tmux commands without breaking anything |
+
 ## Credits
 
 The terminal view uses [SwiftTerm](https://github.com/migueldeicaza/SwiftTerm) by Miguel de Icaza (MIT). It's vendored in `Vendor/SwiftTerm` at commit `73b27f5`, trimmed to its sources, with a simplified `Package.swift` so the build needs no extra downloads.
