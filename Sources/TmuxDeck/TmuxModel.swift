@@ -270,14 +270,14 @@ final class TmuxModel: ObservableObject, Identifiable {
             printf '@@CAP %s\\n' "$w"
             tmux capture-pane -e -p -t "$w" 2>/dev/null | tail -30
           done
-          printf '%s\\n' "$codex_panes" | python3 -c \(sq(codexFinder)) 2>/dev/null
+          printf '%s\\n' "$codex_panes" | python3 -c \(sq(codexFinderScript)) 2>/dev/null
         fi
         """
     }()
 
     /// Runs on the work machine, reading "<pane> <pane pid> <folder>" lines and printing
     /// "@@CODEX <pane> <session id> <rollout path>" for each pane it can place.
-    private static let codexFinder = #"""
+    static let codexFinderScript = #"""
 import json, os, glob, re, subprocess, sys, time
 
 panes, seen_panes = [], set()
@@ -1215,6 +1215,12 @@ for pane, pid, path in panes:
     }
 
     func toggleRawTerminal() {
+        // The focused tile might be a plain terminal, which has its own raw/chat switch.
+        if let tag = LayoutModel.shared.focusedTag,
+           let t = PlainTerminalStore.shared.terminal(forTag: tag) {
+            if t.assistant != nil { PlainTerminalStore.shared.toggleRaw(t) }
+            return
+        }
         guard let w = selectedWindow else { return }
         if rawTerminal.contains(w.id) { rawTerminal.remove(w.id) } else { rawTerminal.insert(w.id) }
     }

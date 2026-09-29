@@ -185,6 +185,11 @@ struct ContentView: View {
                             .contextMenu {
                                 Button("Open to the right") { layout.drop(tag: t.tag, onto: layout.focused, zone: .right) }
                                 Button("Open below") { layout.drop(tag: t.tag, onto: layout.focused, zone: .bottom) }
+                                if t.assistant != nil {
+                                    Button(plain.rawTerminals.contains(t.id) ? "Show as chat" : "Show as terminal") {
+                                        plain.toggleRaw(t)
+                                    }
+                                }
                                 Divider()
                                 Button("Rename…") { renameText = t.title; renamingPlain = t }
                                 Divider()
