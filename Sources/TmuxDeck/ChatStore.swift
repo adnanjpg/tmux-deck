@@ -256,7 +256,7 @@ final class ChatStore: ObservableObject {
     /// records are a mix of `event_msg` (what the TUI showed) and `response_item` (what went
     /// to the model); the TUI events are the readable ones, so they win where both exist.
     static let codexReader = #"""
-import json, sys, os
+import json, sys, os, re
 path, off = sys.argv[1], int(sys.argv[2])
 if not os.path.exists(path):
     print(json.dumps({"k": "missing"})); sys.exit()
@@ -270,6 +270,11 @@ start = off
 if off == 0 and size > 4_000_000:
     start = size - 4_000_000
 with open(path, "rb") as fh:
+    # Newer Codex records every visible item as an `item_completed` event, which is richer
+    # and already de-duplicated; older ones only have the raw model exchange. Which shape a
+    # file uses is fixed when the session starts, so it's decided once from the head.
+    head = fh.read(200_000)
+    items_format = b'"item_completed"' in head
     fh.seek(start)
     data = fh.read()
 if start != off:
@@ -284,7 +289,7 @@ def cut(s, n):
     return s if len(s) <= n else s[:n] + "\n…"
 
 def text_of(content):
-    """Codex content is a list of {type: input_text|output_text, text: …}."""
+    """Content is a list of {type: …, text: …} in every Codex shape."""
     if isinstance(content, str): return content
     if isinstance(content, list):
         return "\n".join(c.get("text", "") for c in content if isinstance(c, dict) and c.get("text"))
@@ -299,8 +304,7 @@ def first_line(s):
 # exec tool returns one JSON object per chunk with the real text under "output".
 def unwrap(body):
     head = first_line(body)
-    import re as _re
-    codes = [int(m) for m in _re.findall(r"Process exited with code (\d+)", body)]
+    codes = [int(m) for m in re.findall(r"Process exited with code (\d+)", body)]
     failed = head.startswith("Script failed") or any(c != 0 for c in codes)
     idx = body.find("Output:\n")
     if head.startswith(("Script completed", "Script failed", "Chunk ID:", "Wall time")) and idx >= 0:
@@ -323,8 +327,15 @@ def unwrap(body):
     text = "\n".join(chunks) if chunks else "\n".join(plain)
     return text.strip(), failed
 
-# exec tool calls carry a JS snippet that calls tools.exec_command({cmd: …}); the command
-# itself is what's worth showing, so pull it out when it's there.
+# A custom_tool_call's input is JavaScript calling tools.exec_command({cmd: "…"}); the
+# command is the readable part. The key is quoted in some versions and bare in others.
+def script_summary(src):
+    m = re.search(r'"?cmd"?\s*:\s*"((?:[^"\\]|\\.)*)"', src or "")
+    if m:
+        try: return json.loads('"%s"' % m.group(1))
+        except Exception: return m.group(1)
+    return (src or "").strip()
+
 def exec_summary(name, arguments):
     try: args = json.loads(arguments) if isinstance(arguments, str) else (arguments or {})
     except Exception: args = {}
@@ -335,22 +346,52 @@ def exec_summary(name, arguments):
             if isinstance(v, list) and v: return " ".join(str(x) for x in v)
     return name
 
-def script_summary(src):
-    """A custom_tool_call's input is JavaScript; show the command it runs, else the script."""
-    import re
-    m = re.search(r'"cmd"\s*:\s*"((?:[^"\\]|\\.)*)"', src or "")
-    if m:
-        try: return json.loads('"%s"' % m.group(1))
-        except Exception: return m.group(1)
-    return (src or "").strip()
-
 NAMES = {"exec": "Shell", "exec_command": "Shell", "shell": "Shell", "wait": "Wait",
          "apply_patch": "Edit", "update_plan": "Plan", "view_image": "Image",
          "request_user_input": "Question", "web_search": "Search"}
 
+def file_change(item, stamp):
+    changes = item.get("changes") or {}
+    added = sum((ch.get("content") or "").count("\n") for ch in changes.values() if isinstance(ch, dict))
+    files = list(changes)
+    label = os.path.basename(files[0]) if len(files) == 1 else "%d files" % len(files)
+    ident = "patch-" + (item.get("id") or stamp)
+    emit(k="tool", id=ident, name="Edit", s=cut(label, 400), add=added, rem=0)
+    detail = "\n".join("%s %s" % ({"add": "A", "delete": "D"}.get((ch or {}).get("type"), "M"), f)
+                       for f, ch in changes.items())
+    emit(k="result", **{"for": ident}, t=cut(detail or "Applied", 4000))
+
+def command_execution(item, stamp):
+    parsed = item.get("parsed_cmd") or []
+    line = ""
+    if parsed and isinstance(parsed[0], dict): line = parsed[0].get("cmd") or ""
+    if not line:
+        cmd = item.get("command")
+        line = cmd[-1] if isinstance(cmd, list) and cmd else (cmd or "")
+    ident = "t-" + (item.get("id") or stamp)
+    emit(k="tool", id=ident, name="Shell", s=cut(line, 400), add=0, rem=0)
+    body = item.get("formatted_output") or item.get("aggregated_output") \
+        or ((item.get("stdout") or "") + (item.get("stderr") or ""))
+    code = item.get("exit_code")
+    failed = (code not in (0, None)) or item.get("status") in ("failed", "error")
+    emit(k="result", **{"for": ident}, t=cut((body or "").strip() or "(no output)", 4000), err=failed)
+
+def extension(item, stamp):
+    ident = "t-" + (item.get("id") or stamp)
+    kind = item.get("kind") or "Extension"
+    name = "Search" if "search" in kind else kind
+    emit(k="tool", id=ident, name=name, s=cut(item.get("query") or kind, 400), add=0, rem=0)
+    results = item.get("results") or []
+    lines = []
+    for r in results:
+        if not isinstance(r, dict): continue
+        lines.append("%s — %s" % (r.get("title") or r.get("domain") or "", r.get("url") or ""))
+    if lines: emit(k="result", **{"for": ident}, t=cut("\n".join(lines), 4000))
+
 pending_calls = {}    # call_id -> emitted item id
 said = set()          # assistant text already shown, so the model-facing copy isn't repeated
 last_user = None      # a compaction replays the last user message; show it once
+
 for raw in data[:end].splitlines():
     try: d = json.loads(raw)
     except Exception: continue
@@ -360,10 +401,43 @@ for raw in data[:end].splitlines():
     pt = p.get("type")
     stamp = d.get("timestamp", "")
 
-    if t == "session_meta":
+    if t == "event_msg" and pt == "item_completed":
+        item = p.get("item") or {}
+        kind = item.get("type")
+        ident = item.get("id") or stamp
+        if kind == "UserMessage":
+            body = text_of(item.get("content"))
+            if body.strip() and body.strip() != last_user:
+                last_user = body.strip()
+                emit(k="user", id="u-" + ident, t=cut(body, 20000))
+        elif kind == "AgentMessage":
+            body = text_of(item.get("content"))
+            if body.strip():
+                said.add(body.strip())
+                emit(k="text", id="a-" + ident, t=body)
+        elif kind == "Reasoning":
+            body = "\n\n".join(x for x in (item.get("summary_text") or []) if isinstance(x, str) and x.strip())
+            if body.strip(): emit(k="thinking", id="r-" + ident, t=cut(body, 6000))
+        elif kind == "CommandExecution":
+            command_execution(item, stamp)
+        elif kind == "FileChange":
+            file_change(item, stamp)
+        elif kind == "Extension":
+            extension(item, stamp)
+        elif kind == "Error":
+            body = item.get("message") or text_of(item.get("content"))
+            if body.strip(): emit(k="note", id="e-" + ident, t=cut(body, 600))
+        elif kind:
+            emit(k="tool", id="t-" + ident, name=NAMES.get(kind, kind),
+                 s=cut(item.get("query") or item.get("name") or "", 400), add=0, rem=0)
         continue
-    if t == "compacted":
+
+    if items_format and t == "response_item":
+        continue   # the same content, in the model's own wire format
+
+    if t in ("session_meta", "compacted", "world_state", "turn_context", "token_usage_record"):
         continue
+
     if t == "event_msg":
         if pt == "user_message":
             msg = p.get("message") or ""
@@ -383,21 +457,11 @@ for raw in data[:end].splitlines():
         elif pt == "task_complete" and isinstance(p.get("error"), dict):
             msg = (p["error"].get("message") or "").strip()
             if msg: emit(k="note", id="e-" + stamp, t=cut(msg, 600))
-        elif pt == "patch_apply_end":
+        elif pt == "patch_apply_end" and not items_format:
             cid = p.get("call_id") or ""
-            changes = p.get("changes") or {}
-            added = removed = 0
-            for ch in changes.values():
-                if not isinstance(ch, dict): continue
-                added += (ch.get("content") or "").count("\n")
-            files = list(changes.keys())
-            label = os.path.basename(files[0]) if len(files) == 1 else "%d files" % len(files)
-            item = "patch-" + (cid or stamp)
-            emit(k="tool", id=item, name="Edit", s=cut(label, 400), add=added, rem=removed)
-            body = (p.get("stdout") or "") + (p.get("stderr") or "")
-            emit(k="result", **{"for": item}, t=cut(body.strip() or ("Applied" if p.get("success") else "Failed"), 4000),
-                 err=not p.get("success", True))
-        elif pt == "web_search_end":
+            item = {"id": cid or stamp, "changes": p.get("changes") or {}}
+            file_change(item, stamp)
+        elif pt == "web_search_end" and not items_format:
             emit(k="tool", id="ws-" + (p.get("call_id") or stamp), name="Search",
                  s=cut(p.get("query") or "", 400), add=0, rem=0)
         continue
@@ -405,8 +469,8 @@ for raw in data[:end].splitlines():
     if t != "response_item": continue
 
     if pt == "message":
-        # Only the assistant's own prose; developer/user roles are the harness's prompts,
-        # and the user's own text already arrived as a user_message event.
+        # Only the assistant's own prose; developer and user roles are the harness's
+        # prompts, and the user's own text already arrived as a user_message event.
         if p.get("role") == "assistant":
             body = text_of(p.get("content"))
             if body.strip() and body.strip() not in said:
@@ -419,13 +483,10 @@ for raw in data[:end].splitlines():
     elif pt in ("function_call", "custom_tool_call"):
         cid = p.get("call_id") or p.get("id") or stamp
         name = p.get("name") or "Tool"
-        if pt == "custom_tool_call":
-            body = script_summary(p.get("input"))
-        else:
-            body = exec_summary(name, p.get("arguments"))
-        item = "t-" + cid
-        pending_calls[cid] = item
-        emit(k="tool", id=item, name=NAMES.get(name, name), s=cut(body, 400), add=0, rem=0)
+        body = script_summary(p.get("input")) if pt == "custom_tool_call" else exec_summary(name, p.get("arguments"))
+        ident = "t-" + cid
+        pending_calls[cid] = ident
+        emit(k="tool", id=ident, name=NAMES.get(name, name), s=cut(body, 400), add=0, rem=0)
     elif pt in ("function_call_output", "custom_tool_call_output"):
         cid = p.get("call_id") or ""
         body, err = unwrap(text_of(p.get("output")))
