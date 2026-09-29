@@ -110,7 +110,7 @@ final class ChatStore: ObservableObject {
 
     private var cacheURL: URL {
         let dir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("TmuxDeck/chats-v9", isDirectory: true)
+            .appendingPathComponent("TmuxDeck/chats-v10", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir.appendingPathComponent("\(assistant.rawValue)-\(sessionID).json")
     }

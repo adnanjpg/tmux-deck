@@ -315,7 +315,10 @@ final class LayoutModel: ObservableObject {
     /// ⌘W: ask to close whatever the focused tile is showing.
     func requestCloseFocused() {
         guard let tag = focusedTag else { return }
-        if let t = PlainTerminalStore.shared.terminal(forTag: tag) {
+        if FileTile.resolve(tag) != nil {
+            // A file tile shows a file; closing it closes nothing else, so don't ask.
+            isSplit ? close(focused) : clearTag(forTag: tag)
+        } else if let t = PlainTerminalStore.shared.terminal(forTag: tag) {
             confirmClose = .plainTerminal(t, tag: tag)
         } else if let (server, window) = TileResolver.resolve(tag) {
             confirmClose = window.isPane ? .pane(server, window, tag: tag) : .window(server, window, tag: tag)
@@ -335,7 +338,7 @@ final class LayoutModel: ObservableObject {
 
     /// Blanks any tile currently showing `tag` (its window/terminal just closed),
     /// instead of waiting for the next refresh to notice it's gone.
-    private func clearTag(forTag tag: String) {
+    func clearTag(forTag tag: String) {
         guard let leafID = root.leaves.first(where: { $0.tag == tag })?.id else { return }
         withAnimation(Self.spring) {
             root = root.mapLeaf(leafID) { node in
@@ -527,7 +530,12 @@ private struct TileHeader: View {
                 .font(.caption)
                 .foregroundStyle(.tertiary)
                 .help("Drag to move this tile")
-            if let t = plainTerm {
+            if let file = tag.flatMap(FileTile.resolve) {
+                Text((file.path as NSString).lastPathComponent)
+                    .font(.callout.weight(focused ? .semibold : .regular)).lineLimit(1)
+                Text(file.host == Remote.localHost ? "This Mac" : file.host)
+                    .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+            } else if let t = plainTerm {
                 Text(t.title).font(.callout.weight(focused ? .semibold : .regular)).lineLimit(1)
                 Text("This Mac").font(.caption).foregroundStyle(.secondary)
             } else if let (server, window) = resolved {

@@ -15,6 +15,7 @@ struct ContentView: View {
     @ObservedObject private var plain = PlainTerminalStore.shared
     @State private var renamingPlain: PlainTerminal?
     @AppStorage("showPRs") private var showPRs = false
+    @AppStorage("showFiles") private var showFiles = false
     /// Collapsed sidebar groups: "host" for a server, "host#session" for a session.
     @AppStorage("collapsedGroups") private var collapsedStore = ""
 
@@ -50,6 +51,9 @@ struct ContentView: View {
         main
             .inspector(isPresented: $showPRs) {
                 PRPanelHost().inspectorColumnWidth(min: 280, ideal: 340, max: 520)
+            }
+            .inspector(isPresented: $showFiles) {
+                FilePanelHost().inspectorColumnWidth(min: 240, ideal: 320, max: 560)
             }
             .sheet(isPresented: $addingServer) { AddServerView(sheet: true) }
             .sheet(item: $restoring) { server in RestoreView(server: server) }
@@ -420,7 +424,9 @@ struct ContentView: View {
     }
 
     @ViewBuilder private func tileContent(leafID: String, tag: String?) -> some View {
-        if let tag, tag.hasPrefix("plain#") {
+        if let tag, let file = FileTile.resolve(tag) {
+            FileEditorView(host: file.host, path: file.path).id(tag)
+        } else if let tag, tag.hasPrefix("plain#") {
             if let t = plain.terminal(forTag: tag) {
                 PlainTerminalView(terminal: t).id(t.id)
             } else {
@@ -506,6 +512,11 @@ struct ContentView: View {
                 Label("Window and pane actions", systemImage: "rectangle.3.group")
             }
             .help("Move, split, break out and close windows and panes")
+
+            Toggle(isOn: $showFiles) {
+                Label("Files", systemImage: "folder")
+            }
+            .help("Browse files on this server (⇧⌘E)")
 
             Toggle(isOn: $showPRs) {
                 Label("Pull requests", systemImage: "arrow.triangle.pull")
