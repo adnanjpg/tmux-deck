@@ -43,7 +43,7 @@ struct ChatView: View {
                     } else if window.state == .claudeWorking {
                         HStack(spacing: 8) {
                             ProgressView().controlSize(.small)
-                            Text("Claude is working…").foregroundStyle(.secondary)
+                            Text("\(store.assistant.displayName) is working…").foregroundStyle(.secondary)
                         }
                         .padding(.top, 4)
                     }
@@ -88,7 +88,7 @@ struct ChatView: View {
                     ProgressView("Loading conversation…")
                 } else if store.items.isEmpty && store.sending.isEmpty {
                     ContentUnavailableView("New conversation", systemImage: "sparkle",
-                                           description: Text("Send Claude a message to get started."))
+                                           description: Text("Send \(store.assistant.displayName) a message to get started."))
                 }
             }
             }
@@ -242,7 +242,7 @@ struct TurnView: View {
             }
             if !turn.replies.isEmpty {
                 let summary = turn.replySummary
-                MessageCard(role: .claude, collapsed: binding(turn.replyID),
+                MessageCard(role: .assistant(store.assistant), collapsed: binding(turn.replyID),
                             summary: summary.text, detail: summary.detail) {
                     VStack(alignment: .leading, spacing: 12) {
                         ForEach(turn.replies) { ChatRow(item: $0) }
@@ -262,7 +262,19 @@ struct TurnView: View {
 
 struct MessageCard<Content: View>: View {
     @Environment(\.theme) private var theme
-    enum Role { case you, claude }
+    enum Role: Equatable {
+        case you
+        case assistant(CodingAssistant)
+        var isYou: Bool { self == .you }
+        var name: String {
+            if case .assistant(let a) = self { return a.displayName }
+            return "You"
+        }
+        var glyph: String {
+            if case .assistant(let a) = self { return a.systemImage }
+            return "person.fill"
+        }
+    }
     let role: Role
     @Binding var collapsed: Bool
     let summary: String
@@ -276,7 +288,7 @@ struct MessageCard<Content: View>: View {
             } label: {
                 HStack(spacing: 8) {
                     avatar
-                    Text(role == .you ? "You" : "Claude").fontWeight(.semibold)
+                    Text(role.name).fontWeight(.semibold)
                     if collapsed {
                         Text(summary)
                             .foregroundStyle(.secondary)
@@ -303,9 +315,9 @@ struct MessageCard<Content: View>: View {
                     .transition(.opacity)
             }
         }
-        .padding(role == .you ? 12 : 0)
+        .padding(role.isYou ? 12 : 0)
         .background {
-            if role == .you {
+            if role.isYou {
                 RoundedRectangle(cornerRadius: 12).fill(theme.tint.opacity(0.09))
                 RoundedRectangle(cornerRadius: 12).strokeBorder(theme.tint.opacity(0.18))
             }
@@ -314,8 +326,8 @@ struct MessageCard<Content: View>: View {
 
     private var avatar: some View {
         ZStack {
-            Circle().fill(role == .you ? theme.tint : Color.orange.opacity(0.85))
-            Image(systemName: role == .you ? "person.fill" : "sparkle")
+            Circle().fill(role.isYou ? theme.tint : Color.orange.opacity(0.85))
+            Image(systemName: role.glyph)
                 .font(.system(size: 11, weight: .semibold))
                 .foregroundStyle(.white)
         }

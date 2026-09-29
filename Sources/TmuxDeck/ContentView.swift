@@ -456,8 +456,11 @@ struct ContentView: View {
         } else if let claude = window.claude {
             ChatView(window: window, store: server.chatStore(for: claude.sessionID))
                 .id(claude.sessionID)
+        } else if let codex = window.codex {
+            ChatView(window: window, store: server.chatStore(codex: codex))
+                .id(codex.sessionID)
         } else if window.state.isClaude {
-            ProgressView("Starting Claude…")
+            ProgressView(window.command.contains("codex") ? "Starting Codex…" : "Starting Claude…")
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
             ConsoleView(window: window)
@@ -550,7 +553,7 @@ struct WindowRow: View {
     }
 
     private var subtitle: String {
-        var parts = [window.assistant == .codex ? "Codex" : window.state.label]
+        var parts = [window.assistant == .codex && !window.state.isClaude ? "Codex" : window.state.label]
         if title != window.folder { parts.append(window.folder) }
         if !compact && window.panes > 1 { parts.append("\(window.panes) panes") }
         if compact && window.zoomed { parts.append("zoomed") }
@@ -559,7 +562,14 @@ struct WindowRow: View {
 
     @ViewBuilder private var icon: some View {
         if window.assistant == .codex {
-            Image(systemName: CodingAssistant.codex.systemImage).foregroundStyle(.secondary)
+            switch window.state {
+            case .claudeWorking:
+                Image(systemName: CodingAssistant.codex.systemImage).foregroundStyle(.blue).symbolEffect(.pulse)
+            case .claudeNeedsYou:
+                Image(systemName: "exclamationmark.bubble.fill").foregroundStyle(.orange)
+            default:
+                Image(systemName: CodingAssistant.codex.systemImage).foregroundStyle(.secondary)
+            }
         } else {
             switch window.state {
             case .claudeWorking:

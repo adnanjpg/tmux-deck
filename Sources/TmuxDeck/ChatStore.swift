@@ -63,6 +63,11 @@ private func arrived(_ sent: String, in logged: String) -> Bool {
 @MainActor
 final class ChatStore: ObservableObject {
     let sessionID: String
+    /// Which CLI wrote the transcript. Claude Code is found by session id under
+    /// ~/.claude/projects; Codex writes one rollout file per session, so it carries a path.
+    let assistant: CodingAssistant
+    private let path: String
+    var transcriptPath: String { path }
     @Published private(set) var items: [ChatItem] = []
     @Published private(set) var loaded = false
     @Published private(set) var missing = false
@@ -88,9 +93,11 @@ final class ChatStore: ObservableObject {
 
     private let remote: Remote
 
-    init(sessionID: String, remote: Remote) {
+    init(sessionID: String, remote: Remote, assistant: CodingAssistant = .claude, path: String = "") {
         self.sessionID = sessionID
         self.remote = remote
+        self.assistant = assistant
+        self.path = path
         if let data = try? Data(contentsOf: cacheURL),
            let snapshot = try? JSONDecoder().decode(Snapshot.self, from: data) {
             items = snapshot.items
@@ -103,9 +110,9 @@ final class ChatStore: ObservableObject {
 
     private var cacheURL: URL {
         let dir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("TmuxDeck/chats-v8", isDirectory: true)
+            .appendingPathComponent("TmuxDeck/chats-v9", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        return dir.appendingPathComponent("\(sessionID).json")
+        return dir.appendingPathComponent("\(assistant.rawValue)-\(sessionID).json")
     }
 
     private func rebuildToolIndex() {
@@ -152,7 +159,10 @@ final class ChatStore: ObservableObject {
         busy = true
         defer { busy = false }
         let startOffset = offset
-        let result = await remote.run("python3 - \(sq(sessionID)) \(offset)", input: Self.reader, timeout: 30)
+        guard assistant == .claude || !path.isEmpty else { return }
+        let argument = assistant == .claude ? sessionID : path
+        let script = assistant == .claude ? Self.reader : Self.codexReader
+        let result = await remote.run("python3 - \(sq(argument)) \(offset)", input: script, timeout: 30)
         guard result.ok else { return }
         var fresh: [ChatItem] = []
         var working = items
@@ -239,6 +249,198 @@ final class ChatStore: ObservableObject {
         loaded = true
         if offset != startOffset { save() }
     }
+
+    /// Runs on the work machine: `python3 - <rollout path> <byte offset>`.
+    ///
+    /// Codex writes one JSONL rollout per session under ~/.codex/sessions/YYYY/MM/DD/. The
+    /// records are a mix of `event_msg` (what the TUI showed) and `response_item` (what went
+    /// to the model); the TUI events are the readable ones, so they win where both exist.
+    static let codexReader = #"""
+import json, sys, os
+path, off = sys.argv[1], int(sys.argv[2])
+if not os.path.exists(path):
+    print(json.dumps({"k": "missing"})); sys.exit()
+size = os.path.getsize(path)
+out = []
+def emit(**d): out.append(d)
+if off > size:
+    off = 0
+    emit(k="reset")
+start = off
+if off == 0 and size > 4_000_000:
+    start = size - 4_000_000
+with open(path, "rb") as fh:
+    fh.seek(start)
+    data = fh.read()
+if start != off:
+    nl = data.find(b"\n")
+    start += nl + 1
+    data = data[nl + 1:]
+end = data.rfind(b"\n") + 1
+new_off = start + end
+
+def cut(s, n):
+    s = s if isinstance(s, str) else json.dumps(s)
+    return s if len(s) <= n else s[:n] + "\n…"
+
+def text_of(content):
+    """Codex content is a list of {type: input_text|output_text, text: …}."""
+    if isinstance(content, str): return content
+    if isinstance(content, list):
+        return "\n".join(c.get("text", "") for c in content if isinstance(c, dict) and c.get("text"))
+    return ""
+
+def first_line(s):
+    for line in s.splitlines():
+        if line.strip(): return line.strip()
+    return ""
+
+# Codex wraps tool output in a "Script completed / Wall time … / Output:" header, and the
+# exec tool returns one JSON object per chunk with the real text under "output".
+def unwrap(body):
+    head = first_line(body)
+    import re as _re
+    codes = [int(m) for m in _re.findall(r"Process exited with code (\d+)", body)]
+    failed = head.startswith("Script failed") or any(c != 0 for c in codes)
+    idx = body.find("Output:\n")
+    if head.startswith(("Script completed", "Script failed", "Chunk ID:", "Wall time")) and idx >= 0:
+        body = body[idx + len("Output:\n"):]
+    chunks, plain = [], []
+    for line in body.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("{") and stripped.endswith("}"):
+            try:
+                obj = json.loads(stripped)
+            except Exception:
+                plain.append(line); continue
+            if isinstance(obj, dict) and "output" in obj:
+                if obj.get("exit_code") not in (0, None): failed = True
+                if obj["output"]: chunks.append(str(obj["output"]))
+                continue
+            plain.append(line)
+        else:
+            plain.append(line)
+    text = "\n".join(chunks) if chunks else "\n".join(plain)
+    return text.strip(), failed
+
+# exec tool calls carry a JS snippet that calls tools.exec_command({cmd: …}); the command
+# itself is what's worth showing, so pull it out when it's there.
+def exec_summary(name, arguments):
+    try: args = json.loads(arguments) if isinstance(arguments, str) else (arguments or {})
+    except Exception: args = {}
+    if isinstance(args, dict):
+        for key in ("cmd", "command", "query", "path", "file_path", "input", "pattern"):
+            v = args.get(key)
+            if isinstance(v, str) and v.strip(): return v.strip()
+            if isinstance(v, list) and v: return " ".join(str(x) for x in v)
+    return name
+
+def script_summary(src):
+    """A custom_tool_call's input is JavaScript; show the command it runs, else the script."""
+    import re
+    m = re.search(r'"cmd"\s*:\s*"((?:[^"\\]|\\.)*)"', src or "")
+    if m:
+        try: return json.loads('"%s"' % m.group(1))
+        except Exception: return m.group(1)
+    return (src or "").strip()
+
+NAMES = {"exec": "Shell", "exec_command": "Shell", "shell": "Shell", "wait": "Wait",
+         "apply_patch": "Edit", "update_plan": "Plan", "view_image": "Image",
+         "request_user_input": "Question", "web_search": "Search"}
+
+pending_calls = {}    # call_id -> emitted item id
+said = set()          # assistant text already shown, so the model-facing copy isn't repeated
+last_user = None      # a compaction replays the last user message; show it once
+for raw in data[:end].splitlines():
+    try: d = json.loads(raw)
+    except Exception: continue
+    t = d.get("type")
+    p = d.get("payload")
+    if not isinstance(p, dict): continue
+    pt = p.get("type")
+    stamp = d.get("timestamp", "")
+
+    if t == "session_meta":
+        continue
+    if t == "compacted":
+        continue
+    if t == "event_msg":
+        if pt == "user_message":
+            msg = p.get("message") or ""
+            if msg.strip() and msg.strip() != last_user:
+                last_user = msg.strip()
+                emit(k="user", id="u-" + stamp, t=cut(msg, 20000),
+                     img=len(p.get("images") or []) + len(p.get("local_images") or []))
+        elif pt == "agent_message":
+            msg = p.get("message") or ""
+            if msg.strip():
+                said.add(msg.strip())
+                emit(k="text", id="a-" + stamp, t=msg)
+        elif pt == "context_compacted":
+            emit(k="note", id="c-" + stamp, t="Conversation compacted to free up context")
+        elif pt == "turn_aborted":
+            emit(k="note", id="x-" + stamp, t="You stopped Codex" if p.get("reason") == "interrupted" else "Turn stopped")
+        elif pt == "task_complete" and isinstance(p.get("error"), dict):
+            msg = (p["error"].get("message") or "").strip()
+            if msg: emit(k="note", id="e-" + stamp, t=cut(msg, 600))
+        elif pt == "patch_apply_end":
+            cid = p.get("call_id") or ""
+            changes = p.get("changes") or {}
+            added = removed = 0
+            for ch in changes.values():
+                if not isinstance(ch, dict): continue
+                added += (ch.get("content") or "").count("\n")
+            files = list(changes.keys())
+            label = os.path.basename(files[0]) if len(files) == 1 else "%d files" % len(files)
+            item = "patch-" + (cid or stamp)
+            emit(k="tool", id=item, name="Edit", s=cut(label, 400), add=added, rem=removed)
+            body = (p.get("stdout") or "") + (p.get("stderr") or "")
+            emit(k="result", **{"for": item}, t=cut(body.strip() or ("Applied" if p.get("success") else "Failed"), 4000),
+                 err=not p.get("success", True))
+        elif pt == "web_search_end":
+            emit(k="tool", id="ws-" + (p.get("call_id") or stamp), name="Search",
+                 s=cut(p.get("query") or "", 400), add=0, rem=0)
+        continue
+
+    if t != "response_item": continue
+
+    if pt == "message":
+        # Only the assistant's own prose; developer/user roles are the harness's prompts,
+        # and the user's own text already arrived as a user_message event.
+        if p.get("role") == "assistant":
+            body = text_of(p.get("content"))
+            if body.strip() and body.strip() not in said:
+                said.add(body.strip())
+                emit(k="text", id="m-" + (p.get("id") or stamp), t=body)
+    elif pt == "reasoning":
+        parts = [s.get("text", "") for s in (p.get("summary") or []) if isinstance(s, dict)]
+        body = "\n\n".join(x for x in parts if x.strip())
+        if body.strip(): emit(k="thinking", id="r-" + (p.get("id") or stamp), t=cut(body, 6000))
+    elif pt in ("function_call", "custom_tool_call"):
+        cid = p.get("call_id") or p.get("id") or stamp
+        name = p.get("name") or "Tool"
+        if pt == "custom_tool_call":
+            body = script_summary(p.get("input"))
+        else:
+            body = exec_summary(name, p.get("arguments"))
+        item = "t-" + cid
+        pending_calls[cid] = item
+        emit(k="tool", id=item, name=NAMES.get(name, name), s=cut(body, 400), add=0, rem=0)
+    elif pt in ("function_call_output", "custom_tool_call_output"):
+        cid = p.get("call_id") or ""
+        body, err = unwrap(text_of(p.get("output")))
+        emit(k="result", **{"for": pending_calls.get(cid, "t-" + cid)}, t=cut(body or "(no output)", 4000), err=err)
+    elif pt == "web_search_call":
+        action = p.get("action") or {}
+        emit(k="tool", id="t-" + (p.get("call_id") or p.get("id") or stamp), name="Search",
+             s=cut(action.get("query") or "", 400), add=0, rem=0)
+
+if off == 0:
+    keep = ("result",)
+    out = [o for o in out if o["k"] not in keep][-600:] + [o for o in out if o["k"] in keep]
+for o in out: print(json.dumps(o))
+print(json.dumps({"k": "end", "off": new_off}))
+"""#
 
     /// Runs on the work machine: `python3 - <session id> <byte offset>`.
     static let reader = #"""

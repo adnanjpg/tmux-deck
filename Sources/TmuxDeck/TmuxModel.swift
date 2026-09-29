@@ -71,6 +71,7 @@ struct TmuxWindow: Identifiable, Hashable {
     var path: String
     var state: WindowState
     var claude: ClaudeSessionInfo?
+    var codex: CodexSessionInfo?
     /// The pane this item shows and types into ("%12"). For a window it's the
     /// Claude pane if there is one, otherwise the active pane.
     var paneID: String = ""
@@ -97,18 +98,27 @@ struct TmuxWindow: Identifiable, Hashable {
 
     var assistant: CodingAssistant? {
         if claude != nil { return .claude }
+        if codex != nil { return .codex }
         return CodingAssistant(command: command)
     }
 
     static func == (a: TmuxWindow, b: TmuxWindow) -> Bool {
         a.id == b.id && a.name == b.name && a.index == b.index && a.command == b.command
             && a.panes == b.panes && a.path == b.path && a.state == b.state && a.claude == b.claude
+            && a.codex == b.codex
             && a.paneID == b.paneID && a.zoomed == b.zoomed && a.paneItems == b.paneItems
     }
     func hash(into hasher: inout Hasher) { hasher.combine(id) }
 }
 
 /// What Claude Code records about a running session in ~/.claude/sessions/<pid>.json.
+/// A running Codex session, matched to its pane. Codex keeps no per-process record the way
+/// Claude Code does, so the rollout file is found by folder and recency (see `codexFinder`).
+struct CodexSessionInfo: Hashable {
+    var sessionID: String
+    var path: String
+}
+
 struct ClaudeSessionInfo: Hashable {
     var sessionID: String
     var name: String?
@@ -236,8 +246,86 @@ final class TmuxModel: ObservableObject, Identifiable {
           printf '@@CAP %s\\n' "$w"
           tmux capture-pane -e -p -t "$w" 2>/dev/null | tail -30
         done
+        codex_panes=$(tmux list-panes -a -f '#{m:*codex*,#{pane_current_command}}' -F '#{pane_id} #{pane_pid} #{pane_current_path}' 2>/dev/null)
+        if [ -n "$codex_panes" ]; then
+          for w in $(printf '%s\\n' "$codex_panes" | awk '{print $1}' | sort -u); do
+            printf '@@CAP %s\\n' "$w"
+            tmux capture-pane -e -p -t "$w" 2>/dev/null | tail -30
+          done
+          printf '%s\\n' "$codex_panes" | python3 -c \(sq(codexFinder)) 2>/dev/null
+        fi
         """
     }()
+
+    /// Runs on the work machine, reading "<pane> <pane pid> <folder>" lines and printing
+    /// "@@CODEX <pane> <session id> <rollout path>" for each pane it can place.
+    private static let codexFinder = #"""
+import json, os, glob, subprocess, sys, time
+
+panes, seen_panes = [], set()
+for line in sys.stdin.read().splitlines():
+    f = line.split(" ", 2)
+    # list-panes -a also lists the app's grouped view sessions, so the same pane repeats.
+    if len(f) == 3 and f[0] not in seen_panes:
+        seen_panes.add(f[0]); panes.append(f)
+if not panes: sys.exit()
+
+# pid -> ppid, so the codex process under each pane's shell can be found.
+ps = subprocess.run(["ps", "-axo", "pid=,ppid=,comm="], capture_output=True, text=True).stdout
+children, names = {}, {}
+for line in ps.splitlines():
+    f = line.split(None, 2)
+    if len(f) < 3: continue
+    try: pid, ppid = int(f[0]), int(f[1])
+    except ValueError: continue
+    children.setdefault(ppid, []).append(pid)
+    names[pid] = os.path.basename(f[2].strip())
+
+def find_codex(root):
+    stack, seen = [root], set()
+    while stack:
+        pid = stack.pop()
+        if pid in seen: continue
+        seen.add(pid)
+        if names.get(pid, "").startswith("codex") and pid != root: return pid
+        stack += children.get(pid, [])
+    return None
+
+def started(pid):
+    out = subprocess.run(["ps", "-o", "lstart=", "-p", str(pid)], capture_output=True, text=True).stdout.strip()
+    try: return time.mktime(time.strptime(out, "%a %b %d %H:%M:%S %Y"))
+    except ValueError: return 0
+
+rollouts = glob.glob(os.path.expanduser("~/.codex/sessions/*/*/*/rollout-*.jsonl"))
+meta = {}
+for path in sorted(rollouts, key=os.path.getmtime, reverse=True)[:400]:
+    try:
+        with open(path, "rb") as fh:
+            head = json.loads(fh.readline().decode("utf-8", "replace"))
+    except Exception:
+        continue
+    p = head.get("payload") or {}
+    if head.get("type") != "session_meta": continue
+    meta[path] = (p.get("cwd") or "", p.get("session_id") or p.get("id") or "", os.path.getmtime(path))
+
+# Newest rollout started in the pane's folder wins; a folder with two Codex sessions in it
+# hands the busier one to the pane that started later, which is the best guess available.
+taken = set()
+found = []
+for pane, pid, path in panes:
+    codex = find_codex(int(pid))
+    if not codex: continue
+    since = started(codex) - 5
+    best = None
+    for f, (cwd, sid, mtime) in meta.items():
+        if f in taken or cwd != path or mtime < since: continue
+        if best is None or mtime > meta[best][2]: best = f
+    if best:
+        taken.add(best)
+        found.append((pane, meta[best][1], best))
+for pane, sid, f in found:
+    print("@@CODEX %s %s %s" % (pane, sid, f))
+"""#
 
     func refresh() async {
         let result = await remote.run(Self.pollScript)
@@ -256,7 +344,14 @@ final class TmuxModel: ObservableObject, Identifiable {
         var rows: [[String]] = []
         var currentCapture: String?
         var claudeByPane: [String: (info: ClaudeSessionInfo, updated: Double)] = [:]
+        var codexByPane: [String: CodexSessionInfo] = [:]
         for line in output.split(separator: "\n", omittingEmptySubsequences: false).map(String.init) {
+            if line.hasPrefix("@@CODEX ") {
+                let f = line.dropFirst(8).split(separator: " ", maxSplits: 2).map(String.init)
+                if f.count == 3 { codexByPane[f[0]] = CodexSessionInfo(sessionID: f[1], path: f[2]) }
+                currentCapture = nil
+                continue
+            }
             if line.hasPrefix("@@SES ") {
                 guard let obj = try? JSONSerialization.jsonObject(with: Data(line.dropFirst(6).utf8)) as? [String: Any],
                       let sid = obj["sessionId"] as? String,
@@ -305,10 +400,20 @@ final class TmuxModel: ObservableObject, Identifiable {
                 claudeInfo = last.0
             }
             let isClaude = claudeInfo != nil || command.contains("claude")
+            // Codex is bridged the same way as Claude: the rollout can take a moment to appear,
+            // and a pane that's running codex shouldn't flip to a raw terminal while it does.
+            var codexInfo = codexByPane[paneID]
+            if let info = codexInfo {
+                lastCodex[paneID] = (info, Date())
+            } else if command.contains("codex"), let last = lastCodex[paneID], Date().timeIntervalSince(last.1) < 60 {
+                codexInfo = last.0
+            }
             let state: WindowState
             if isClaude {
                 let plain = raw.map(stripANSI).filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
                 state = Self.claudeState(Array(plain.suffix(12)), info: claudeInfo)
+            } else if command.contains("codex") {
+                state = Self.codexState(raw.map(stripANSI))
             } else if ["bash", "zsh", "sh", "fish"].contains(command) {
                 state = .shell
             } else {
@@ -316,7 +421,7 @@ final class TmuxModel: ObservableObject, Identifiable {
             }
             var pane = TmuxWindow(session: session, windowID: f[1], index: Int(f[2]) ?? 0,
                                   name: f[3], command: command, panes: Int(f[5]) ?? 1, path: f[7],
-                                  state: state, claude: claudeInfo)
+                                  state: state, claude: claudeInfo, codex: codexInfo)
             pane.paneID = paneID
             pane.paneIndex = Int(f[9]) ?? 0
             pane.isPane = true
@@ -333,6 +438,7 @@ final class TmuxModel: ObservableObject, Identifiable {
             for key in windowOrder[session] ?? [] {
                 let panes = (panesByWindow[key] ?? []).sorted { $0.paneIndex < $1.paneIndex }
                 guard let primary = panes.first(where: { $0.state.isClaude })
+                        ?? panes.first(where: { $0.codex != nil })
                         ?? panes.first(where: { activePane.contains($0.paneID) }) ?? panes.first else { continue }
                 var window = primary
                 window.isPane = false
@@ -375,6 +481,7 @@ final class TmuxModel: ObservableObject, Identifiable {
         let claudeIDs = allItems.compactMap(\.claude?.sessionID)
         fetchMissingTitles(claudeIDs)
         prefetchChats(claudeIDs)
+        prefetchCodexChats(allItems.compactMap(\.codex))
 
         let newSessions = order.map { TmuxSession(name: $0, windows: bySession[$0]!.sorted { $0.index < $1.index }) }
         if newSessions != sessions {
@@ -389,6 +496,19 @@ final class TmuxModel: ObservableObject, Identifiable {
         if selection == nil || selectedWindow == nil {
             selection = sessions.first?.windows.first?.id
         }
+    }
+
+    /// Reads a Codex screen. Codex keeps no status file, so the footer is the only signal:
+    /// it shows "Working (…  esc to interrupt)" while a turn runs, and an approval prompt
+    /// when it needs an answer.
+    static func codexState(_ lines: [String]) -> WindowState {
+        let tail = lines.suffix(14).joined(separator: "\n")
+        if tail.contains("Allow command") || tail.contains("approve") || tail.contains("[y/n]")
+            || tail.contains("Yes, and don't ask") || tail.contains("❯ 1.") {
+            return .claudeNeedsYou
+        }
+        if tail.contains("esc to interrupt") || tail.contains("Esc to interrupt") { return .claudeWorking }
+        return .claudeReady
     }
 
     /// Reads the bottom of a Claude Code screen and guesses what it's doing.
@@ -606,6 +726,7 @@ final class TmuxModel: ObservableObject, Identifiable {
     }
 
     private var lastViewActive: [String: String] = [:]
+    private var lastCodex: [String: (CodexSessionInfo, Date)] = [:]
 
     /// The terminal of the focused tile, when that tile is showing `session`. Only the tile
     /// you're looking at should be able to drag the sidebar selection around.
@@ -714,8 +835,26 @@ final class TmuxModel: ObservableObject, Identifiable {
         return store
     }
 
+    /// Codex transcripts are found by file, and the file can move (a resumed session keeps
+    /// its id but the app may learn the path later), so the store is re-made if it changes.
+    func chatStore(codex: CodexSessionInfo) -> ChatStore {
+        let key = "codex:" + codex.sessionID
+        if let store = chatStores[key], store.transcriptPath == codex.path { return store }
+        let store = ChatStore(sessionID: codex.sessionID, remote: remote, assistant: .codex, path: codex.path)
+        chatStores[key] = store
+        return store
+    }
+
     /// Quietly loads every conversation in the background, one at a time,
     /// so even chats you haven't opened yet appear immediately.
+    private func prefetchCodexChats(_ sessions: [CodexSessionInfo]) {
+        let pending = sessions.filter { prefetched.insert("codex:" + $0.sessionID).inserted }
+        guard !pending.isEmpty else { return }
+        Task(priority: .background) {
+            for info in pending { await chatStore(codex: info).poll() }
+        }
+    }
+
     private func prefetchChats(_ ids: [String]) {
         let pending = ids.filter { !prefetched.contains($0) }
         guard !pending.isEmpty else { return }
@@ -1092,7 +1231,11 @@ final class TmuxModel: ObservableObject, Identifiable {
     /// Types `text` into the window and presses Enter. Uses a bracketed paste so
     /// multi-line messages arrive as one message instead of one per line.
     func send(text: String, images: [String] = [], to w: TmuxWindow) {
-        if let id = w.claude?.sessionID { chatStore(for: id).addSending(text, images: images.count) }
+        if let id = w.claude?.sessionID {
+            chatStore(for: id).addSending(text, images: images.count)
+        } else if let codex = w.codex {
+            chatStore(codex: codex).addSending(text, images: images.count)
+        }
         let t = sq(target(w))
         // Each image path is pasted on its own, like dragging an image into Claude's terminal.
         let imagePaste = images.map { path in
@@ -1109,7 +1252,22 @@ final class TmuxModel: ObservableObject, Identifiable {
         // The message is uploaded first, then pasted and submitted by a background job on
         // the server (setsid nohup), so a dropped connection can't leave it half-sent.
         let inner: String
-        if w.state.isClaude {
+        if w.assistant == .codex {
+            // Codex's composer marks its input line with "›". Same problem as Claude: an
+            // Enter that lands while it's still taking in the paste is dropped, so wait for
+            // the text to show up and press Enter until the line clears.
+            inner = """
+            f="$1"
+            \(imagePaste)tmux load-buffer -b deck-compose "$f" && tmux paste-buffer -p -d -b deck-compose -t \(t) || exit 1
+            first=$(head -n1 "$f" | sed 's/^[[:space:]]*//' | cut -c1-20)
+            inbox() { tmux capture-pane -p -t \(t) | perl -pe 's/\\xc2\\xa0/ /g' | grep '›' | tail -1; }
+            waiting() { l=$(inbox); case "$l" in *"$first"*|*"Pasted"*) return 0;; *) return 1;; esac; }
+            for i in 1 2 3 4 5 6 7 8 9 10; do waiting && break; sleep 0.2; done
+            sleep 0.3
+            for i in 1 2 3 4; do tmux send-keys -t \(t) Enter; sleep 1; waiting || break; done
+            rm -f "$f" "$0"
+            """
+        } else if w.state.isClaude {
             // Claude Code can swallow an Enter that arrives while it's still taking in a
             // paste, and for /commands the first Enter only picks the autocomplete entry.
             // So: wait until the text shows in Claude's input line, press Enter, and keep

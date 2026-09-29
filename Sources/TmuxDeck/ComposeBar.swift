@@ -67,11 +67,11 @@ struct ComposeBar: View {
                 .overlay(RoundedRectangle(cornerRadius: 10)
                     .strokeBorder(dropTargeted ? theme.tint : theme.line, lineWidth: dropTargeted ? 2 : 1))
 
-                if window.state.isClaude {
+                if let assistant = window.assistant {
                     Button { model.send(keys: ["Escape"], to: window) } label: {
                         Image(systemName: "stop.fill")
                     }
-                    .help("Stop Claude (Esc)")
+                    .help("Stop \(assistant.displayName) (Esc)")
                     .controlSize(.large)
                     .disabled(window.state != .claudeWorking)
                 }
@@ -102,9 +102,8 @@ struct ComposeBar: View {
     private var suggestion: String? { model.suggestions[window.id] }
 
     private var placeholder: String {
-        window.state.isClaude
-            ? "Message Claude — Enter to send, Shift+Enter for a new line"
-            : "Type a command — Enter to run"
+        guard let assistant = window.assistant else { return "Type a command — Enter to run" }
+        return "Message \(assistant.displayName) — Enter to send, Shift+Enter for a new line"
     }
 
     private func promptButtons(_ options: [PromptOption]) -> some View {
