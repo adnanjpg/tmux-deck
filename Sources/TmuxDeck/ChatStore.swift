@@ -79,6 +79,9 @@ final class ChatStore: ObservableObject {
     @Published private(set) var sending: [PendingMessage] = []
     /// Message ids you've collapsed in this chat.
     @Published var collapsed: Set<String> = []
+    /// What ⌘F is looking for in this conversation.
+    @Published var search = ""
+    @Published var searching = false
 
     private var offset = 0
     private var toolIndex: [String: Int] = [:]
@@ -135,6 +138,20 @@ final class ChatStore: ObservableObject {
         // Slash commands (/clear, /compact…) aren't chat messages, so they'd never be confirmed.
         if images == 0 && text.trimmingCharacters(in: .whitespaces).hasPrefix("/") { return }
         sending.append(PendingMessage(text: text, images: images))
+    }
+
+    /// Every piece of text in an item, for searching.
+    static func haystack(_ item: ChatItem) -> String {
+        var parts: [String] = []
+        switch item.kind {
+        case .user(let t), .assistant(let t), .note(let t), .thinking(let t),
+             .command(let t), .recap(let t):
+            parts.append(t)
+        case .tool(let name, let summary, _, _):
+            parts.append(name); parts.append(summary)
+        }
+        if let result = item.result { parts.append(result) }
+        return parts.joined(separator: "\n")
     }
 
     /// The question Claude is waiting on, if its last AskUserQuestion has no answer yet.

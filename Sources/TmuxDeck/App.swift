@@ -43,6 +43,9 @@ struct TmuxDeckApp: App {
                     .keyboardShortcut("w", modifiers: [.command])
             }
             CommandGroup(after: .sidebar) {
+                Button("Find…") { NotificationCenter.default.post(name: .findInChat, object: nil) }
+                    .keyboardShortcut("f", modifiers: [.command])
+                Divider()
                 Button("Files") { UserDefaults.standard.set(!UserDefaults.standard.bool(forKey: "showFiles"), forKey: "showFiles") }
                     .keyboardShortcut("e", modifiers: [.command, .shift])
                 Button("Changes") { model?.showChangesForFocused() }

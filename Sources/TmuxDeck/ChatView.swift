@@ -19,11 +19,12 @@ struct ChatView: View {
     var body: some View {
         VStack(spacing: 0) {
             if !turns.isEmpty { chatHeader }
+            if store.searching { searchBar }
             ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {
                     let all = turns
-                    if all.count > visibleTurns {
+                    if all.count > visibleTurns && !store.searching {
                         Button {
                             visibleTurns += 25
                         } label: {
@@ -33,7 +34,7 @@ struct ChatView: View {
                         .frame(maxWidth: .infinity)
                         .padding(.bottom, 8)
                     }
-                    ForEach(all.suffix(visibleTurns)) { turn in
+                    ForEach(store.searching ? all : Array(all.suffix(visibleTurns))) { turn in
                         TurnView(turn: turn, store: store)
                     }
                     // A finished conversation's leftover queue records are history, not a queue.
@@ -118,6 +119,9 @@ struct ChatView: View {
             }
         }
         .background(theme.bg)
+        .onReceive(NotificationCenter.default.publisher(for: .findInChat)) { _ in
+            withAnimation(.snappy) { store.searching = true }
+        }
         .task(id: store.sessionID) {
             await store.catchUp()
             // A finished conversation isn't going to change, so read it once.
@@ -131,7 +135,43 @@ struct ChatView: View {
 }
 
 extension ChatView {
-    private var turns: [Turn] { Turn.group(store.items) }
+    /// While a search is on, only the turns that match it are shown — the point is to find the
+    /// exchange, and the transcript is too long to highlight in place usefully.
+    private var turns: [Turn] {
+        let all = Turn.group(store.items)
+        let query = store.search.trimmingCharacters(in: .whitespaces)
+        guard store.searching, !query.isEmpty else { return all }
+        return all.filter { turn in
+            let items = (turn.user.map { [$0] } ?? []) + turn.replies
+            return items.contains { ChatStore.haystack($0).localizedCaseInsensitiveContains(query) }
+        }
+    }
+
+    private var searchBar: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+            TextField("Find in this conversation", text: $store.search)
+                .textFieldStyle(.plain)
+                .font(fonts.callout)
+                .onSubmit { }
+            if !store.search.trimmingCharacters(in: .whitespaces).isEmpty {
+                Text("\(turns.count) \(turns.count == 1 ? "turn" : "turns")")
+                    .font(fonts.caption).foregroundStyle(.secondary)
+            }
+            Button {
+                withAnimation(.snappy) { store.searching = false }
+                store.search = ""
+            } label: {
+                Image(systemName: "xmark.circle.fill").foregroundStyle(.tertiary)
+            }
+            .buttonStyle(.plain)
+            .keyboardShortcut(.cancelAction)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 7)
+        .background(theme.panel)
+        .overlay(alignment: .bottom) { Divider() }
+    }
 
     private var chatHeader: some View {
         let ids = turns.flatMap { $0.cardIDs }
@@ -147,6 +187,13 @@ extension ChatView {
                 .font(fonts.caption)
                 .foregroundStyle(.secondary)
             Spacer()
+            Button {
+                withAnimation(.snappy) { store.searching.toggle() }
+                if !store.searching { store.search = "" }
+            } label: {
+                Label("Find", systemImage: "magnifyingglass")
+            }
+            .help("Search this conversation (⌘F)")
             Button {
                 withAnimation(.snappy) { store.collapsed = Set(ids) }
             } label: {
@@ -261,6 +308,7 @@ struct TurnView: View {
                             Text(text)
                                 .textSelection(.enabled)
                                 .fixedSize(horizontal: false, vertical: true)
+                                .contextMenu { CopyItems(text: text, what: "message") }
                         }
                     }
                 }
@@ -277,6 +325,13 @@ struct TurnView: View {
         }
         .padding(.vertical, 14)
         .overlay(alignment: .bottom) { Divider().opacity(0.6) }
+        .contextMenu {
+            Button("Copy this turn") { Clipboard.put(turn.asText(store.assistant)) }
+            Button("Copy the whole conversation") {
+                Clipboard.put(Turn.group(store.items).map { $0.asText(store.assistant) }
+                    .joined(separator: "\n\n---\n\n"))
+            }
+        }
     }
 
     private func binding(_ id: String) -> Binding<Bool> {
@@ -624,11 +679,16 @@ struct ToolRow: View {
                 .frame(maxHeight: 320)
                 .background(theme.code, in: RoundedRectangle(cornerRadius: 8))
                 .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(theme.line))
+                .overlay(alignment: .topTrailing) { CopyButton(text: detail).padding(6) }
             }
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
         .background(theme.widget, in: RoundedRectangle(cornerRadius: 10))
+        .contextMenu {
+            Button("Copy what it ran") { Clipboard.put(displaySummary) }
+            if result != nil { Button("Copy the output") { Clipboard.put(detail) } }
+        }
     }
 
     private var displaySummary: String {
@@ -828,6 +888,8 @@ struct MarkdownText: View {
                     }
                     .background(theme.code, in: RoundedRectangle(cornerRadius: 8))
                     .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(theme.line))
+                    .overlay(alignment: .topTrailing) { CopyButton(text: s).padding(6) }
+                    .contextMenu { CopyItems(text: s, what: "code") }
                 }
             }
         }
@@ -849,5 +911,84 @@ struct MarkdownText: View {
     static func inline(_ s: String) -> AttributedString {
         (try? AttributedString(markdown: s, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)))
             ?? AttributedString(s)
+    }
+}
+
+// MARK: Copying
+
+enum Clipboard {
+    static func put(_ text: String) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+    }
+}
+
+/// The copy entries every piece of chat text gets in its context menu.
+struct CopyItems: View {
+    let text: String
+    let what: String
+
+    var body: some View {
+        Button("Copy \(what)") { Clipboard.put(text) }
+        Button("Copy as quote") {
+            Clipboard.put(text.split(separator: "\n", omittingEmptySubsequences: false)
+                .map { "> " + $0 }.joined(separator: "\n"))
+        }
+    }
+}
+
+/// A copy button that says it worked, for code blocks and tool output.
+struct CopyButton: View {
+    let text: String
+    @State private var copied = false
+
+    var body: some View {
+        Button {
+            Clipboard.put(text)
+            copied = true
+            Task {
+                try? await Task.sleep(for: .seconds(1.4))
+                copied = false
+            }
+        } label: {
+            Image(systemName: copied ? "checkmark" : "doc.on.doc")
+                .font(.system(size: 10, weight: .semibold))
+                .padding(5)
+                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 5))
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(copied ? Color.green : Color.secondary)
+        .help(copied ? "Copied" : "Copy")
+    }
+}
+
+extension Turn {
+    /// The turn as plain text, for the clipboard.
+    func asText(_ assistant: CodingAssistant) -> String {
+        var out: [String] = []
+        if let user {
+            switch user.kind {
+            case .user(let t): out.append("You:\n" + t)
+            case .command(let c): out.append("You ran: " + c)
+            default: break
+            }
+            if let result = user.result, !result.isEmpty { out.append(result) }
+        }
+        var body: [String] = []
+        for reply in replies {
+            switch reply.kind {
+            case .assistant(let t): body.append(t)
+            case .thinking(let t): body.append("(thinking)\n" + t)
+            case .tool(let name, let summary, _, _):
+                body.append("[\(name)] \(summary)")
+                if let result = reply.result, !result.isEmpty { body.append(result) }
+            case .note(let t), .recap(let t): body.append(t)
+            default: break
+            }
+        }
+        if !body.isEmpty {
+            out.append("\(assistant.displayName):\n" + body.joined(separator: "\n\n"))
+        }
+        return out.joined(separator: "\n\n")
     }
 }
