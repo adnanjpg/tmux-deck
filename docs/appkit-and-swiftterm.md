@@ -99,3 +99,25 @@ gets `⌘Return`. Chaining two `.keyboardShortcut` modifiers on one button regis
 
 Anything user-visible should take its colours from `AppTheme`, never from a hardcoded `Color`, or it
 will look wrong under a dark VS Code theme.
+
+### Terminals don't follow macOS on their own
+
+SwiftTerm stores plain RGB, so a dynamic `NSColor` never re-resolves: a terminal keeps whatever
+colours it was given when it was created. With the System theme those colours come from
+`NSApp.effectiveAppearance`, so switching macOS between light and dark left every terminal behind —
+and a dark-mode TUI like Codex, which draws white text, became unreadable on the light background.
+`ThemeManager` therefore observes `NSApp.effectiveAppearance` (KVO) and re-applies, and terminals
+re-read their colours on `.themeChanged`.
+
+The same background is what answers a program's `OSC 11` query, which is how Codex and friends pick
+a light or dark palette — one more reason it has to be right.
+
+## Text size
+
+macOS SwiftUI **ignores `dynamicTypeSize`** — `.font(.body)` renders identically at `.xSmall` and
+`.accessibility3` (measured). So ⌘+/⌘−/⌘0 can't lean on it. `Zoom.swift` holds one base size and
+`AppFont` derives every size from it; views read `\.fonts` from the environment instead of naming
+`.body`/`.caption`. Terminals get `AppFont.terminal` and re-apply on `.fontSizeChanged`.
+
+If you add a view with text in the chat, console or status bar, take its font from `\.fonts` or it
+won't zoom.

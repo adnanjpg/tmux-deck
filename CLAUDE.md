@@ -60,7 +60,7 @@ into split-view tiles on demand.
 | Transport | `Remote.swift` | Runs a command on a host — SSH (multiplexed) or local zsh |
 | Sidebar + tiles | `ContentView.swift` | Sidebar, toolbar, dialogs, which view fills a tile |
 | Split view | `SplitLayout.swift` | Layout tree, drag/drop, resize, `LayoutModel` (focus, ⌘W) |
-| Claude chat | `ChatView.swift`, `ChatStore.swift` | Reads the transcript, renders turns/markdown/tables |
+| Claude & Codex chat | `ChatView.swift`, `ChatStore.swift` | Reads either CLI's transcript, renders turns/markdown/tables |
 | Input | `ComposeBar.swift` | The message box, image paste, Claude's question cards |
 | Raw terminal | `TerminalController.swift`, `TerminalPane.swift` | SwiftTerm attached to a tmux view session |
 | Plain terminals | `PlainTerminals.swift` | Shells, Claude, or Codex on this Mac with no tmux at all |
@@ -68,6 +68,7 @@ into split-view tiles on demand.
 | Status bar | `StatusBar.swift`, `StatusLineEditor.swift` | Claude's status line as native chips |
 | Task switcher | `TabSwitcher.swift`, `AnsiThumbnail.swift` | ⌃⇥ HUD with rendered screen thumbnails |
 | Themes | `Themes.swift` | Reads VS Code themes, applies them everywhere |
+| Text size | `Zoom.swift` | ⌘+/⌘−/⌘0; `AppFont` in the environment, since macOS ignores dynamic type |
 | PRs | `PullRequests.swift` | `gh`-backed PR panel and inline PR chips |
 | Misc | `MacKeys.swift`, `UpdateWatcher.swift` | Mac editing keys in terminals; stale-build banner |
 

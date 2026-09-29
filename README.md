@@ -17,7 +17,7 @@ tmux stays the backend. Your sessions keep running on the server when the app cl
 - **Plain shell windows as a console:** selectable, searchable output (⌘F) with the same input box.
 - **Every tmux action as a button or menu item:** new window or session, split, even out panes, zoom, swap, move a pane into its own window or into another window, move windows between sessions, rename, close. You can also drag panes and windows around in the sidebar.
 - **A raw terminal view** (⌥⌘T) for anything interactive, like vim or htop.
-- **Codex CLI windows.** Start Codex in a remote tmux session or a local plain terminal from the New menu. Codex keeps its full interactive terminal UI, its own configuration, and its normal approval and sandbox settings.
+- **Codex CLI windows, as a chat too.** Start Codex in a remote tmux session or a local plain terminal from the New menu. Codex windows get the same native chat view as Claude, read from Codex's own session transcript, with the real terminal one keystroke away (⌥⌘T). Codex keeps its own configuration, approval and sandbox settings.
 - **Restore lost sessions.** The app remembers each server's sessions and windows. If tmux loses them (a crash, a reboot), the sidebar offers Restore previous sessions: pick windows and it recreates them in their folders, resuming each Claude conversation with `claude --resume`. It also uses the session records Claude Code leaves on the server, so it can recover Claude windows it never saw. Also in each server's ••• menu.
 - **VS Code themes.** Settings → Themes lists every theme in VS Code, Cursor and your installed VS Code extensions (following `include` chains), plus Match VS Code to follow VS Code's current theme, and Import… for a theme `.json` or `.vsix`. A theme colors the chat, sidebar, input, tool rows, code blocks (with syntax highlighting from the theme's token colors), the console and the raw terminal (16 ANSI colors, cursor, selection).
 - **A real task switcher.** Hold ⌃ and tap ⇥ (or ⇧⇥) for a Windows-style grid of every open window — **grouped by server, then by tmux session** — each showing a **thumbnail of what's actually on its screen**, rendered from a live colour capture of that pane. The window you started from is marked "current"; the highlighted one is ringed. Release ⌃ to switch, ↑↓ to jump between sessions, ↩ or a click to pick, Esc to cancel.
@@ -25,7 +25,7 @@ tmux stays the backend. Your sessions keep running on the server when the app cl
 - **Split view.** Drag a window from the sidebar onto the main area: drop on an edge to split left, right, above or below, or in the middle to replace. Drag a tile's title bar to move it, drag the dividers to resize, ✕ to close a tile, or ⇧⌘U to go back to one. Right-click a window for Open to the right / Open below. Clicking a window in the sidebar opens it on its own (or focuses its tile if it's already on screen). Splits nest, animate, and are remembered.
 - **This Mac too, with or without tmux.** From + → Add server, pick This Mac — tmux sessions (local tmux with the same chat view, split view and everything else, no SSH; needs `brew install tmux`), or This Mac — plain terminals: normal shells, Claude, or Codex running directly in the app, like Terminal.app tabs (⇧⌘T), with themes, Mac shortcuts and split view. Plain terminals end when the app quits and reopen in the same folders next launch.
 - **Several servers at once.** Add servers from the + button (it lists the hosts in your `~/.ssh/config`); each gets its own section in the sidebar.
-- **Port forwarding per server.** Turn it on in a server's ••• menu to run that host's `LocalForward` rules from your SSH config in the background. It reconnects on its own and shows which ports are forwarding and which are already taken on your Mac.
+- **Port forwarding you can edit.** Each server shows how many ports are reaching it; click the chip for the full list. Every rule shows whether its port is actually bound, already taken by something else on your Mac, or switched off. Add a forward (`local → host:port`), switch one off, or remove one you added — rules from your SSH config are switched off rather than rewritten. It runs in its own background SSH connection and reconnects on its own.
 - **Pull requests at a glance.** A side panel (⇧⌘P) lists your open PRs and ones waiting for your review for the open window's repository (or all repos), highlights the PRs mentioned in the open chat, with approval status and CI results (passed / failed / running). PR links in chats become live chips; hover for approvals and failing checks, click to open. Uses the GitHub CLI (`gh`), which must be installed and signed in on your Mac.
 
 ## Requirements
@@ -57,6 +57,7 @@ To update, `git pull` and run `./build-app.sh` again.
 | New Codex window | ⌥⌘N |
 | New terminal window | ⌘T |
 | New plain Mac terminal | ⇧⌘T |
+| Bigger / smaller / normal text | ⌘+ / ⌘− / ⌘0 |
 | Split right / down | ⌘D / ⇧⌘D |
 | Copy the whole window | ⇧⌘C |
 | Show as raw terminal | ⌥⌘T |
@@ -87,7 +88,7 @@ The app doesn't restart itself after `./build-app.sh` — whatever was open keep
 
 - The chat view shows the main conversation only, not subagents' inner steps.
 - Claude's status and permission choices are read from its screen and session record, so a future Claude Code release could need small fixes.
-- Codex currently uses its terminal UI rather than the Claude-specific native chat renderer.
+- Codex's chat is read from its session files, so a future Codex release could need small fixes. Restoring a Codex window starts a new session rather than resuming the old conversation.
 - If you type into Claude from somewhere else, the half-typed text doesn't appear in the app's box. Sent messages always show up.
 
 ## Working on the code
@@ -99,7 +100,7 @@ and the gotchas that cost real debugging time. Deeper notes live in [`docs/`](do
 |---|---|
 | [docs/architecture.md](docs/architecture.md) | File-by-file map, tag format, split-layout tree, persisted state |
 | [docs/claude-code-integration.md](docs/claude-code-integration.md) | Claude Code's session records and transcript format, screen scraping, how messages are sent reliably |
-| [docs/codex-cli-integration.md](docs/codex-cli-integration.md) | How Codex is launched and presented in Tmux Deck |
+| [docs/codex-cli-integration.md](docs/codex-cli-integration.md) | Codex's rollout files, matching one to a pane, and its two record formats |
 | [docs/tmux.md](docs/tmux.md) | tmux view sessions, targeting, pane zoom, capturing screens, portable remote shell |
 | [docs/appkit-and-swiftterm.md](docs/appkit-and-swiftterm.md) | `acceptsFirstMouse`, the vendored SwiftTerm patch, the switcher panel, themes |
 | [docs/testing.md](docs/testing.md) | How to verify a change, and how to test tmux commands without breaking anything |

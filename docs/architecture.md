@@ -12,7 +12,7 @@ TmuxDeckApp (App.swift)
         ├── sidebar                  servers → sessions → windows → panes, plain terminals
         └── SplitLayoutView          the tiled detail area (SplitLayout.swift)
             └── tileContent(tag)     picks ONE of:
-                ├── ChatView         a Claude window (reads its transcript)
+                ├── ChatView         a Claude or Codex window (reads its transcript)
                 ├── TerminalPane     raw tmux terminal (SwiftTerm over SSH)
                 ├── ConsoleView      non-Claude tmux window as selectable text
                 └── PlainTerminalView a local shell, Claude, or Codex with no tmux

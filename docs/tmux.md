@@ -62,6 +62,18 @@ what makes panes appear as sub-rows in the sidebar.
 - Commands that should act on what the user is *looking at* target the view session
   (`deck-…:@30`) so tmux's idea of "current" matches the app's.
 
+## One terminal per tile
+
+`TerminalController`s are keyed by **tile**, not by tmux session. A view session has exactly one
+current window, so a session-keyed controller could only ever be in one tile — putting two windows
+of the same session side by side used to show "Terminal shown in another tile" in the second one.
+Each tile now attaches its own `deck-…` view session; they share the SSH connection, so the cost is
+one extra tmux client each. Controllers whose tile is gone are dropped from the poll loop rather
+than from `onDisappear`, which also fires while SwiftUI re-lays out.
+
+Two tiles on two *panes of the same window* still fight over zoom, because zoom is a property of the
+tmux window (below).
+
 ## Single-pane tiles and zoom
 
 A tile showing one pane of a multi-pane window would otherwise render the whole window (tmux draws
