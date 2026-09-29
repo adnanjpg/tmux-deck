@@ -33,7 +33,7 @@ final class AppModel: ObservableObject {
     func start() {
         MacKeys.install()
         TabSwitcherController.shared.installMonitors()
-        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { _, _ in }
+        Notifications.install()
         for s in servers { s.start() }
         for f in forwarders.values where f.enabled { f.start() }
     }

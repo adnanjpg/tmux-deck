@@ -353,6 +353,9 @@ struct ContentView: View {
         Button("Show changes") {
             layout.drop(tag: DiffTile.tag(host: m.host, path: window.path), onto: layout.focused, zone: .right)
         }
+        Toggle("Notify me about this window", isOn: Binding(
+            get: { !Notifications.windowMuted(host: m.host, window: window.id) },
+            set: { Notifications.setWindowMuted(host: m.host, window: window.id, !$0) }))
         Divider()
         Button("Rename…") { target = m; renameText = window.title; renaming = .window(window) }
         Divider()
@@ -805,6 +808,9 @@ struct ServerHeader: View {
                 Button("New session…", action: onNewSession)
                 Button("Past conversations…", action: onHistory)
                 Button("Restore previous windows…", action: onRestore)
+                Toggle("Notify me about this server", isOn: Binding(
+                    get: { !Notifications.serverMuted(server.host) },
+                    set: { Notifications.setServerMuted(server.host, !$0) }))
                 Button("Collapse all sessions") { withAnimation(.snappy) { onCollapseSessions(true) } }
                 Button("Expand all sessions") { withAnimation(.snappy) { onCollapseSessions(false) } }
                 do {

@@ -176,12 +176,26 @@ struct SettingsView: View {
     @AppStorage("sound.finish.name") private var finishSound = "Glass"
     @AppStorage("sound.question.on") private var questionOn = true
     @AppStorage("sound.question.name") private var questionSound = "Ping"
+    @AppStorage("sound.problem.on") private var problemOn = false
+    @AppStorage("sound.problem.name") private var problemSound = "Basso"
+    @AppStorage("banner.finish.on") private var finishBanner = true
+    @AppStorage("banner.question.on") private var questionBanner = true
+    @AppStorage("banner.problem.on") private var problemBanner = true
 
     var body: some View {
         Form {
+            Section("Notifications") {
+                Text("A banner appears only for a window you aren't looking at; the sound plays either way. Clicking a banner opens that window.")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Toggle("Banner when an assistant finishes", isOn: $finishBanner)
+                Toggle("Banner when an assistant needs your answer", isOn: $questionBanner)
+                Toggle("Banner when something goes wrong", isOn: $problemBanner)
+            }
             Section("Sounds") {
-                soundRow("When Claude finishes", on: $finishOn, name: $finishSound)
-                soundRow("When Claude asks you something", on: $questionOn, name: $questionSound)
+                soundRow("When an assistant finishes", on: $finishOn, name: $finishSound)
+                soundRow("When an assistant asks you something", on: $questionOn, name: $questionSound)
+                soundRow("When something goes wrong", on: $problemOn, name: $problemSound)
             }
             Section("Servers") {
                 Text("Add servers with the + button at the bottom of the sidebar. Each server's ••• menu has port forwarding and Remove.")

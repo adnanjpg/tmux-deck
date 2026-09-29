@@ -827,6 +827,7 @@ for pane, pid, path in panes:
             guard let before, before != w.state else { continue }
             let isFinish = before == .claudeWorking && w.state == .claudeReady
             let isQuestion = w.state == .claudeNeedsYou
+            guard !Notifications.muted(host: host, window: w.id) else { continue }
             finished = finished || isFinish
             asking = asking || isQuestion
             if w.state == .claudeWorking { unseenDone.remove(w.id) }
@@ -834,23 +835,25 @@ for pane, pid, path in panes:
             let onScreen = appActive && LayoutModel.shared.root.leaves.contains { $0.tag == "\(host)#\(w.id)" }
             if onScreen { continue }
             if isFinish { unseenDone.insert(w.id) }
+            let name = w.assistant?.displayName ?? "Claude"
             if isFinish {
-                notify("Claude finished", "\(w.session) › \(displayTitle(w)) is ready for you.")
+                notify(.finish, "\(name) finished", "\(w.session) › \(displayTitle(w)) is ready for you.", window: w.id)
             } else if isQuestion {
-                notify("Claude needs your answer", "\(w.session) › \(displayTitle(w)) is waiting for you.")
+                notify(.question, "\(name) needs your answer", "\(w.session) › \(displayTitle(w)) is waiting for you.", window: w.id)
             }
         }
         if asking { Sounds.play(.question) } else if finished { Sounds.play(.finish) }
     }
 
-    private func notify(_ title: String, _ body: String) {
-        let content = UNMutableNotificationContent()
-        content.title = title
-        content.subtitle = host
-        content.body = body
-        content.sound = nil   // Sounds.play handles sound, so it isn't doubled
-        UNUserNotificationCenter.current().add(
-            UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil))
+    private func notify(_ event: Sounds.Event, _ title: String, _ body: String, window: String) {
+        Notifications.post(event, title: title, subtitle: host, body: body,
+                           tag: "\(host)#\(window)")
+    }
+
+    /// Tells you when something went wrong that you'd otherwise only catch by looking.
+    func notifyProblem(_ title: String, _ body: String) {
+        flash(title)
+        Notifications.post(.problem, title: title, subtitle: host, body: body, tag: nil)
     }
 
     /// Claude's conversation title if it has one, then a name you gave the window, then the folder.
@@ -1365,7 +1368,10 @@ for pane, pid, path in panes:
         """
         Task {
             let result = await remote.run(script, input: text)
-            if !result.ok { flash("Couldn't send that. Check the connection.") }
+            if !result.ok {
+                notifyProblem("Your message didn't send",
+                              "\(displayTitle(w)) — \(Self.describe(result))")
+            }
             await refresh()
         }
     }
@@ -1478,7 +1484,17 @@ func stripANSI(_ s: String) -> String {
 
 /// The sounds played when Claude finishes or asks you something. Set in Settings.
 enum Sounds {
-    enum Event: String { case finish, question }
+    enum Event: String, CaseIterable {
+        case finish, question, problem
+
+        var title: String {
+            switch self {
+            case .finish: "An assistant finished"
+            case .question: "An assistant needs your answer"
+            case .problem: "Something went wrong"
+            }
+        }
+    }
 
     static let available = ["Glass", "Ping", "Hero", "Submarine", "Blow", "Bottle", "Frog", "Funk",
                             "Morse", "Pop", "Purr", "Sosumi", "Tink", "Basso"]
@@ -1487,6 +1503,7 @@ enum Sounds {
         UserDefaults.standard.register(defaults: [
             "sound.finish.on": true, "sound.finish.name": "Glass",
             "sound.question.on": true, "sound.question.name": "Ping",
+            "sound.problem.on": false, "sound.problem.name": "Basso",
         ])
     }
 
