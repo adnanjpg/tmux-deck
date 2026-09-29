@@ -117,6 +117,9 @@ struct TmuxWindow: Identifiable, Hashable {
 struct CodexSessionInfo: Hashable {
     var sessionID: String
     var path: String
+    /// Codex's own running summary of what the session is for (`thread_goal_updated`), which is
+    /// the closest thing it has to Claude Code's conversation title.
+    var title: String?
 }
 
 struct ClaudeSessionInfo: Hashable {
@@ -337,6 +340,59 @@ for path in sorted(rollouts, key=os.path.getmtime, reverse=True)[:400]:
     if not isinstance(p.get("source", "cli"), str): continue
     meta[path] = (p.get("cwd") or "", p.get("session_id") or p.get("id") or "", os.path.getmtime(path))
 
+def goal_of(path):
+    """A name for the conversation.
+
+    Some Codex versions keep a running one-line objective for the thread
+    (`thread_goal_updated`, written as the session goes, so near the end of the file). Newer
+    ones don't, and then the first thing the user asked for is the best label available — the
+    same thing the history browser shows."""
+    try:
+        size = os.path.getsize(path)
+        with open(path, "rb") as fh:
+            head = fh.read(min(size, 300_000))
+            if size > 700_000:
+                fh.seek(size - 400_000)
+                tail = fh.read()
+            else:
+                tail = b""
+    except OSError:
+        return ""
+    goal = ""
+    for raw in head.splitlines() + tail.splitlines():
+        if b'"thread_goal_updated"' not in raw:
+            continue
+        try:
+            p = (json.loads(raw).get("payload") or {})
+        except Exception:
+            continue
+        text = ((p.get("goal") or {}).get("objective") or "").strip()
+        if text:
+            goal = text
+    if not goal:
+        for raw in head.splitlines():
+            if b'"user_message"' not in raw and b'"UserMessage"' not in raw:
+                continue
+            try:
+                p = (json.loads(raw).get("payload") or {})
+            except Exception:
+                continue
+            if p.get("type") == "user_message":
+                goal = (p.get("message") or "").strip()
+            elif p.get("type") == "item_completed":
+                item = p.get("item") or {}
+                if item.get("type") == "UserMessage":
+                    goal = "\n".join(c.get("text", "") for c in item.get("content") or []
+                                     if isinstance(c, dict)).strip()
+            if goal:
+                break
+    if not goal:
+        return ""
+    for line in goal.splitlines():
+        if line.strip():
+            return "\t" + line.strip()[:90]
+    return ""
+
 taken = set()
 for pane, pid, path in panes:
     codex = find_codex(int(pid))
@@ -352,7 +408,7 @@ for pane, pid, path in panes:
         if best_score is None or score < best_score: best, best_score = f, score
     if best:
         taken.add(best)
-        print("@@CODEX %s %s %s" % (pane, meta[best][1], best))
+        print("@@CODEX %s %s %s" % (pane, meta[best][1], best + goal_of(best)))
 """#
 
     func refresh() async {
@@ -404,7 +460,11 @@ for pane, pid, path in panes:
         for line in output.split(separator: "\n", omittingEmptySubsequences: false).map(String.init) {
             if line.hasPrefix("@@CODEX ") {
                 let f = line.dropFirst(8).split(separator: " ", maxSplits: 2).map(String.init)
-                if f.count == 3 { codexByPane[f[0]] = CodexSessionInfo(sessionID: f[1], path: f[2]) }
+                if f.count == 3 {
+                    let tab = f[2].split(separator: "\t", maxSplits: 1).map(String.init)
+                    codexByPane[f[0]] = CodexSessionInfo(sessionID: f[1], path: tab[0],
+                                                        title: tab.count > 1 ? tab[1] : nil)
+                }
                 currentCapture = nil
                 continue
             }
@@ -865,8 +925,15 @@ for pane, pid, path in panes:
     }
 
     private func baseTitle(_ w: TmuxWindow) -> String {
-        if let id = w.claude?.sessionID, let title = titles[id], w.isPane || w.name == w.command { return title }
-        if w.isPane { return w.state.isClaude ? "Claude · \(w.folder)" : "\(w.command) · \(w.folder)" }
+        // A tmux window the user renamed wins; otherwise the assistant's own title for the
+        // conversation, which is far more useful than "codex" or the folder name.
+        let automatic = w.isPane || w.name == w.command
+        if let id = w.claude?.sessionID, let title = titles[id], automatic { return title }
+        if let title = w.codex?.title, !title.isEmpty, automatic { return title }
+        if w.isPane {
+            if let assistant = w.assistant { return "\(assistant.displayName) · \(w.folder)" }
+            return "\(w.command) · \(w.folder)"
+        }
         return w.title
     }
 
@@ -1039,10 +1106,13 @@ for pane, pid, path in panes:
         var path: String
         var command: String
         var claudeSessionID: String?
-        var id: String { claudeSessionID ?? "\(session)|\(order)|\(path)" }
+        var codexSessionID: String?
+        var id: String { claudeSessionID ?? codexSessionID ?? "\(session)|\(order)|\(path)" }
         var isClaude: Bool { claudeSessionID != nil }
         var assistant: CodingAssistant? {
-            isClaude ? .claude : CodingAssistant(command: command)
+            if claudeSessionID != nil { return .claude }
+            if codexSessionID != nil { return .codex }
+            return CodingAssistant(command: command)
         }
     }
 
@@ -1053,7 +1123,8 @@ for pane, pid, path in panes:
         let saved = sessions.flatMap { s in
             s.windows.flatMap { w in w.paneItems.isEmpty ? [w] : w.paneItems }.map { w in
                 SavedWindow(session: w.session, order: w.index * 100 + w.paneIndex, name: w.name, path: w.path,
-                            command: w.command, claudeSessionID: w.claude?.sessionID)
+                            command: w.command, claudeSessionID: w.claude?.sessionID,
+                            codexSessionID: w.codex?.sessionID)
             }
         }
         if let data = try? JSONEncoder().encode(saved) { UserDefaults.standard.set(data, forKey: snapshotKey) }
@@ -1087,22 +1158,26 @@ for pane, pid, path in panes:
             let session = String(tmuxTarget[..<colon])
             let windowNumber = Int(tmuxTarget[colon...].drop { !$0.isNumber }.prefix { $0.isNumber }) ?? 0
             candidates.append(SavedWindow(session: session, order: 100_000 + windowNumber, name: "claude",
-                                          path: obj["cwd"] as? String ?? "~", command: "claude", claudeSessionID: id))
+                                          path: obj["cwd"] as? String ?? "~", command: "claude",
+                                          claudeSessionID: id, codexSessionID: nil))
         }
         // Leave out what's already running.
         let live = sessions.flatMap(\.windows).flatMap { [$0] + $0.paneItems }
         let liveClaude = Set(live.compactMap(\.claude?.sessionID))
+        let liveCodex = Set(live.compactMap(\.codex?.sessionID))
         let liveSessions = Set(sessions.map(\.name))
         let missing = candidates.filter { c in
-            c.isClaude ? !liveClaude.contains(c.claudeSessionID!) : !liveSessions.contains(c.session)
+            if let id = c.claudeSessionID { return !liveClaude.contains(id) }
+            if let id = c.codexSessionID { return !liveCodex.contains(id) }
+            return !liveSessions.contains(c.session)
         }
         fetchMissingTitles(missing.compactMap(\.claudeSessionID))
         return missing.sorted { ($0.session, $0.order) < ($1.session, $1.order) }
     }
 
     /// Recreates windows: each in its folder, in its tmux session (created if needed).
-    /// Claude windows resume their conversation, Codex starts a new interactive session,
-    /// and shells open in their folder.
+    /// Claude and Codex windows resume their conversation where the app knows its id;
+    /// shells just open in their folder.
     func restore(_ windows: [SavedWindow]) {
         var script = ""
         var seen: [String] = []
@@ -1120,6 +1195,10 @@ for pane, pid, path in panes:
             }
             if let cid = w.claudeSessionID {
                 script += "tmux send-keys -t \"$id\" \(sq("claude --resume " + cid)) Enter\n"
+            } else if let cid = w.codexSessionID {
+                // Codex resumes by session id too; without it you'd get a blank session in the
+                // right folder and lose the conversation.
+                script += "tmux send-keys -t \"$id\" \(sq("codex resume " + cid)) Enter\n"
             } else if w.assistant == .codex {
                 script += "tmux send-keys -t \"$id\" codex Enter\n"
             }
