@@ -108,7 +108,7 @@ Codex keeps its full interactive CLI UI and its existing configuration.
 
 Files on disk:
 
-- `~/Library/Caches/TmuxDeck/chats-v8/<session id>.json` — parsed transcript cache, so reopening a
+- `~/Library/Caches/TmuxDeck/chats-v9/<assistant>-<session id>.json` — parsed transcript cache, so reopening a
   chat is instant. **Bump the `chats-vN` directory name whenever the parsed shape changes**,
   otherwise old caches deserialize into the new format and you get silently wrong chats.
 - `~/Library/Application Support/TmuxDeck/Themes/` — imported `.json` / `.vsix` themes.

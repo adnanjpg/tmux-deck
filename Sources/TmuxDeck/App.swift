@@ -180,7 +180,7 @@ struct SettingsView: View {
             Section("Terminal") {
                 Stepper("Text size: \(Int(fontSize)) pt (⌘+ / ⌘− / ⌘0)", value: $fontSize, in: 8...28)
                     .onChange(of: fontSize) { _, new in Zoom.shared.set(new) }
-                Text("Applies the next time you open the app.")
+                Text("Changes the chat, the console and the terminals straight away.")
                     .font(.caption).foregroundStyle(.secondary)
             }
         }

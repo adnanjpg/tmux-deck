@@ -97,7 +97,10 @@ struct ChatView: View {
             VStack(spacing: 0) {
                 ComposeBar(window: window)
                     .id(window.id)
-                StatusBar(window: window)
+                // The chips act by typing Claude's own commands (/model, /effort, Shift+Tab
+                // mode cycling), which mean nothing to Codex — and its screen doesn't carry
+                // Claude's status line to read in the first place.
+                if store.assistant == .claude { StatusBar(window: window) }
             }
             .background(theme.panel)
         }
