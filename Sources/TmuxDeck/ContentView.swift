@@ -785,24 +785,27 @@ struct PortsView: View {
                     .help("Forward these ports to this Mac")
             }
             Text(status).font(.callout).foregroundStyle(.secondary)
+                .lineLimit(3, reservesSpace: true)
                 .fixedSize(horizontal: false, vertical: true)
-            if let e = forwarder.lastError { Text(e).font(.caption).foregroundStyle(.red) }
+            Text(forwarder.lastError ?? " ").font(.caption).foregroundStyle(.red)
+                .lineLimit(1)
 
-            if forwarder.rules.isEmpty {
-                Text("No forwards yet. Add one below, or put LocalForward lines in ~/.ssh/config for \(forwarder.host).")
-                    .font(.caption).foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            } else {
-                ScrollView {
-                    VStack(spacing: 0) {
+            ScrollView {
+                if forwarder.rules.isEmpty {
+                    Text("No forwards yet. Add one below, or put LocalForward lines in ~/.ssh/config for \(forwarder.host).")
+                        .font(.caption).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                } else {
+                    LazyVStack(spacing: 0) {
                         ForEach(forwarder.rules) { rule in
                             row(rule)
                             Divider()
                         }
                     }
                 }
-                .frame(maxHeight: 260)
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
 
             Divider()
             VStack(alignment: .leading, spacing: 6) {
@@ -822,11 +825,13 @@ struct PortsView: View {
                 }
                 .textFieldStyle(.roundedBorder)
                 .font(.callout.monospacedDigit())
-                if let addError { Text(addError).font(.caption).foregroundStyle(.red) }
+                Text(addError ?? " ").font(.caption).foregroundStyle(.red).lineLimit(1)
             }
         }
         .padding(16)
-        .frame(width: 400)
+        // A fixed size: a popover that grows or shrinks re-lays out its scroll view, which
+        // sends the list back to the top while you're reading it.
+        .frame(width: 420, height: 480)
     }
 
     private var status: String {

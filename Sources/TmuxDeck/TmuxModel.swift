@@ -1350,13 +1350,33 @@ for pane, pid, path in panes:
     }
 
     /// Runs a Claude slash command that opens a screen (like /usage), reads it, and closes it.
+    ///
+    /// Typing the command opens Claude's autocomplete, and Enter runs it — but the screen can
+    /// take a while to draw on a slow link. Waiting a fixed couple of seconds captured the
+    /// autocomplete menu instead and then pressed Escape, so the command looked like it had
+    /// simply been cancelled. So: press Enter, then wait until the command has left the input
+    /// line and the screen has settled, for up to ten seconds.
     func captureClaudeScreen(command: String, in w: TmuxWindow) async -> String {
         let t = sq(target(w))
         let script = """
-        tmux send-keys -t \(t) -l \(sq(command)) && sleep 0.3 && tmux send-keys -t \(t) Enter && sleep 2.2 \
-          && tmux capture-pane -p -t \(t) ; tmux send-keys -t \(t) Escape
+        screen() { tmux capture-pane -p -t \(t) | perl -pe 's/\\xc2\\xa0/ /g'; }
+        typed() { screen | grep '^❯' | tail -1 | grep -qF \(sq(command)); }
+        tmux send-keys -t \(t) -l \(sq(command)) || exit 1
+        sleep 0.4
+        tmux send-keys -t \(t) Enter
+        for i in $(seq 1 25); do sleep 0.4; typed || break; done
+        # Let the screen finish drawing: capture until two reads in a row agree.
+        prev=""
+        for i in 1 2 3 4 5 6 7 8; do
+          now=$(screen)
+          [ -n "$prev" ] && [ "$now" = "$prev" ] && break
+          prev="$now"
+          sleep 0.4
+        done
+        printf '%s\\n' "$prev"
+        tmux send-keys -t \(t) Escape
         """
-        let result = await remote.run(script, timeout: 20)
+        let result = await remote.run(script, timeout: 30)
         let lines = stripANSI(result.stdout).split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
         // Keep the part above Claude's input box, trimmed of blank edges.
         let rules = lines.indices.filter { lines[$0].trimmingCharacters(in: .whitespaces).hasPrefix("───") }
