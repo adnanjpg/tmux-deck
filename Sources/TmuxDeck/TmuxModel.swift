@@ -384,6 +384,7 @@ final class TmuxModel: ObservableObject, Identifiable {
 
         notifyStateChanges()
         followTmuxSelection(viewActive)
+        pruneTerminals(liveTiles: Set(LayoutModel.shared.root.leaves.map(\.id)))
 
         if selection == nil || selectedWindow == nil {
             selection = sessions.first?.windows.first?.id
@@ -606,6 +607,12 @@ final class TmuxModel: ObservableObject, Identifiable {
 
     private var lastViewActive: [String: String] = [:]
 
+    /// The terminal of the focused tile, when that tile is showing `session`. Only the tile
+    /// you're looking at should be able to drag the sidebar selection around.
+    private func focusedController(for session: String) -> TerminalController? {
+        terminals[LayoutModel.shared.focused + "\u{1}" + session]
+    }
+
     /// If you switch windows from inside the raw terminal (a tmux shortcut or
     /// `tmux select-window`), move the sidebar selection to match. Only reacts
     /// when tmux's window actually changed, and only while the raw terminal is
@@ -614,7 +621,7 @@ final class TmuxModel: ObservableObject, Identifiable {
         defer { lastViewActive = viewActive }
         guard Date().timeIntervalSince(lastUserSelection) > 3, let current = selectedWindow,
               rawTerminal.contains(current.id) || current.state.isRunningProgram,
-              let controller = terminals[current.session], controller.alive,
+              let controller = focusedController(for: current.session), controller.alive,
               let active = viewActive[controller.viewSession],
               let previous = lastViewActive[controller.viewSession],
               active != previous, active != current.windowID else { return }
@@ -928,11 +935,38 @@ final class TmuxModel: ObservableObject, Identifiable {
 
     // MARK: Terminals
 
-    func controller(for session: String) -> TerminalController {
-        if let existing = terminals[session] { return existing }
+    /// The raw terminal for one tile.
+    ///
+    /// A terminal is a live SSH connection attached to its own grouped view session, and a
+    /// view session has exactly one current window — so a controller can only ever show one
+    /// window at a time. Keying them by tile (rather than by tmux session) is what lets two
+    /// tiles sit side by side on two windows of the same session; they share the SSH
+    /// connection, so the extra cost is one tmux client each.
+    func controller(forTile tile: String, session: String) -> TerminalController {
+        let key = tile + "\u{1}" + session
+        if let existing = terminals[key] { return existing }
         let controller = TerminalController(session: session, remote: remote)
-        terminals[session] = controller
+        terminals[key] = controller
         return controller
+    }
+
+    /// Any live view session for `session`, for commands that should land where you're looking.
+    private func viewSession(for session: String) -> String? {
+        terminals.values.first { $0.session == session && $0.alive }?.viewSession
+            ?? terminals.values.first { $0.session == session }?.viewSession
+    }
+
+    /// Drops the terminals of tiles that are no longer on screen. Called from the poll loop:
+    /// `onDisappear` also fires while SwiftUI is re-laying out, which would tear down a
+    /// terminal that's about to come straight back.
+    private func pruneTerminals(liveTiles: Set<String>) {
+        for (key, controller) in terminals {
+            guard let tile = key.split(separator: "\u{1}").first.map(String.init),
+                  !liveTiles.contains(tile) else { continue }
+            controller.releaseZoom()
+            controller.stop()
+            terminals.removeValue(forKey: key)
+        }
     }
 
     func userSelected(_ id: TmuxWindow.ID?) {
@@ -957,14 +991,14 @@ final class TmuxModel: ObservableObject, Identifiable {
     /// new windows land where you're looking.
     private func target(_ w: TmuxWindow) -> String {
         if !w.paneID.isEmpty { return w.paneID }
-        let view = terminals[w.session]?.viewSession ?? w.session
+        let view = viewSession(for: w.session) ?? w.session
         return "\(view):\(w.windowID)"
     }
 
     func newWindow(assistant: CodingAssistant?, in session: String? = nil) {
         let sessionName = session ?? selectedWindow?.session ?? sessions.first?.name ?? "main"
         // Target the view session so the new window opens in the folder you're looking at.
-        let targetSession = terminals[sessionName]?.viewSession ?? sessionName
+        let targetSession = viewSession(for: sessionName) ?? sessionName
         let launch = assistant.map { "tmux send-keys -t \"$id\" \(sq($0.command)) Enter" } ?? ":"
         let script: String
         if sessions.contains(where: { $0.name == sessionName }) {
@@ -1020,9 +1054,13 @@ final class TmuxModel: ObservableObject, Identifiable {
         guard !name.isEmpty, name != session else { return }
         Task {
             let result = await tmux("tmux rename-session -t \(sq(session)) \(sq(name))")
-            if result.ok, let controller = terminals.removeValue(forKey: session) {
-                controller.session = name
-                terminals[name] = controller
+            if result.ok {
+                for (key, controller) in terminals where controller.session == session {
+                    controller.session = name
+                    terminals.removeValue(forKey: key)
+                    let tile = key.split(separator: "\u{1}").first.map(String.init) ?? key
+                    terminals[tile + "\u{1}" + name] = controller
+                }
                 if let sel = selection, sel.hasPrefix(session + "|") {
                     selection = name + sel.dropFirst(session.count)
                 }
@@ -1031,7 +1069,10 @@ final class TmuxModel: ObservableObject, Identifiable {
     }
 
     func killSession(_ session: String) {
-        terminals.removeValue(forKey: session)?.stop()
+        for (key, controller) in terminals where controller.session == session {
+            controller.stop()
+            terminals.removeValue(forKey: key)
+        }
         Task { _ = await tmux("tmux kill-session -t \(sq(session))") }
     }
 

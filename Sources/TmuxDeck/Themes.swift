@@ -110,6 +110,20 @@ final class ThemeManager: ObservableObject {
         scan()
         apply()
         startWatchingVSCode()
+        watchAppearance()
+    }
+
+    /// The System theme takes its colours from macOS, and terminals bake theirs in
+    /// (SwiftTerm stores plain RGB, so a dynamic NSColor wouldn't re-resolve). Switching
+    /// macOS between light and dark therefore has to re-apply the theme by hand, or the
+    /// terminals stay on whatever appearance was current when they were created — which
+    /// left dark-mode programs like Codex drawing white text on a white background.
+    private var appearanceObserver: NSKeyValueObservation?
+
+    private func watchAppearance() {
+        appearanceObserver = NSApp?.observe(\.effectiveAppearance) { [weak self] _, _ in
+            MainActor.assumeIsolated { self?.apply() }
+        }
     }
 
     func select(_ value: String) {

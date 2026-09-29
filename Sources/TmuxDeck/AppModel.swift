@@ -159,28 +159,122 @@ final class AppModel: ObservableObject {
     }
 }
 
-/// Runs the LocalForward rules from ~/.ssh/config for one server, in a separate
-/// background SSH connection that reconnects if it drops.
+/// One forwarded port: `localhost:<local>` on this Mac reaches `<remoteHost>:<remotePort>`
+/// as seen from the server.
+struct ForwardRule: Identifiable, Hashable, Codable {
+    var local: Int
+    var host: String = "localhost"
+    var remote: Int
+    /// True when the rule comes from a LocalForward line in ~/.ssh/config rather than the app.
+    var fromConfig = false
+
+    var id: Int { local }
+    var summary: String { "localhost:\(local) → \(host):\(remote)" }
+}
+
+/// Runs a server's port forwards in a separate background SSH connection that reconnects
+/// if it drops.
+///
+/// The rules start as the host's LocalForward lines from ~/.ssh/config, and the app can add,
+/// remove and switch off individual ones. Every rule is passed explicitly as `-L` with
+/// `ClearAllForwardings=yes`, so what's running is exactly the list shown in the UI — ssh
+/// won't quietly re-add the config's own forwards on top.
 @MainActor
 final class PortForwarder: ObservableObject {
     let host: String
     @Published private(set) var enabled: Bool
-    @Published private(set) var ports: [Int] = []
+    @Published private(set) var rules: [ForwardRule] = []
+    @Published private(set) var disabled: Set<Int> = []
     @Published private(set) var busyPorts: Set<Int> = []
+    @Published private(set) var listening: Set<Int> = []
     @Published private(set) var running = false
     @Published private(set) var lastError: String?
     var onChange: (() -> Void)?
 
     private var process: Process?
     private var restartTask: Task<Void, Never>?
+    private var pollTask: Task<Void, Never>?
+
+    private var customKey: String { "forward.rules.\(host)" }
+    private var disabledKey: String { "forward.off.\(host)" }
 
     init(host: String) {
         self.host = host
         self.enabled = UserDefaults.standard.bool(forKey: "forward.\(host)")
-        self.ports = Self.configuredPorts(host)
+        self.disabled = Set(UserDefaults.standard.array(forKey: disabledKey) as? [Int] ?? [])
+        reloadRules()
     }
 
-    var activePorts: [Int] { ports.filter { !busyPorts.contains($0) } }
+    /// Config rules plus the app's own; a rule added in the app wins on the same local port.
+    private func reloadRules() {
+        var byPort: [Int: ForwardRule] = [:]
+        for r in Self.configuredRules(host) { byPort[r.local] = r }
+        for r in custom { byPort[r.local] = r }
+        rules = byPort.values.sorted { $0.local < $1.local }
+    }
+
+    private var custom: [ForwardRule] {
+        get {
+            guard let data = UserDefaults.standard.data(forKey: customKey) else { return [] }
+            return (try? JSONDecoder().decode([ForwardRule].self, from: data)) ?? []
+        }
+        set {
+            UserDefaults.standard.set(try? JSONEncoder().encode(newValue), forKey: customKey)
+        }
+    }
+
+    var activeRules: [ForwardRule] { rules.filter { !disabled.contains($0.local) } }
+    /// Ports that are forwarded right now: switched on, bound, and not taken by something else.
+    var forwardedPorts: [Int] { activeRules.map(\.local).filter { !busyPorts.contains($0) && listening.contains($0) } }
+
+    // MARK: Editing
+
+    func add(local: Int, host remoteHost: String, remote: Int) {
+        let name = remoteHost.trimmingCharacters(in: .whitespaces)
+        let rule = ForwardRule(local: local, host: name.isEmpty ? "localhost" : name, remote: remote)
+        custom = custom.filter { $0.local != local } + [rule]
+        disabled.remove(local)
+        saveDisabled()
+        reloadRules()
+        restart()
+    }
+
+    /// Removes a rule the app added. A rule from ~/.ssh/config is switched off instead —
+    /// the app doesn't edit the user's SSH config.
+    func remove(_ rule: ForwardRule) {
+        if custom.contains(where: { $0.local == rule.local }) {
+            custom = custom.filter { $0.local != rule.local }
+        }
+        reloadRules()
+        if rules.contains(where: { $0.local == rule.local }) {
+            setEnabled(rule, false)
+        } else {
+            restart()
+        }
+    }
+
+    func setEnabled(_ rule: ForwardRule, _ on: Bool) {
+        if on { disabled.remove(rule.local) } else { disabled.insert(rule.local) }
+        saveDisabled()
+        restart()
+    }
+
+    private func saveDisabled() {
+        UserDefaults.standard.set(Array(disabled), forKey: disabledKey)
+    }
+
+    func refreshFromConfig() {
+        reloadRules()
+        restart()
+    }
+
+    private func restart() {
+        guard enabled else { onChange?(); return }
+        terminate()
+        start()
+    }
+
+    // MARK: Running
 
     func setEnabled(_ on: Bool) {
         enabled = on
@@ -189,15 +283,18 @@ final class PortForwarder: ObservableObject {
     }
 
     func start() {
-        guard enabled, process == nil else { return }
-        ports = Self.configuredPorts(host)
+        guard enabled, process == nil, !activeRules.isEmpty else { onChange?(); return }
         busyPorts = []
+        listening = []
         lastError = nil
         let p = Process()
         p.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
         p.arguments = ["-N", "-o", "BatchMode=yes", "-o", "ExitOnForwardFailure=no",
+                       "-o", "ClearAllForwardings=yes",
                        "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3",
-                       "-o", "ControlMaster=no", "-o", "ControlPath=none", host]
+                       "-o", "ControlMaster=no", "-o", "ControlPath=none"]
+            + activeRules.flatMap { ["-L", "\($0.local):\($0.host):\($0.remote)"] }
+            + [host]
         let err = Pipe()
         p.standardError = err
         p.standardOutput = FileHandle.nullDevice
@@ -214,6 +311,7 @@ final class PortForwarder: ObservableObject {
             try p.run()
             process = p
             running = true
+            watchListeners(pid: p.processIdentifier)
         } catch {
             lastError = error.localizedDescription
         }
@@ -223,16 +321,57 @@ final class PortForwarder: ObservableObject {
     func stop() {
         restartTask?.cancel()
         restartTask = nil
+        pollTask?.cancel()
+        pollTask = nil
         terminate()
         running = false
         busyPorts = []
+        listening = []
         onChange?()
     }
 
     func terminate() {
+        pollTask?.cancel()
+        pollTask = nil
         process?.terminationHandler = nil
         process?.terminate()
         process = nil
+    }
+
+    /// ssh only complains about a port it *couldn't* bind, so the ports that did bind are
+    /// found by asking the OS which ones this ssh process is listening on.
+    private func watchListeners(pid: Int32) {
+        pollTask?.cancel()
+        pollTask = Task { [weak self] in
+            while !Task.isCancelled {
+                let ports = await Self.listeningPorts(pid: pid)
+                guard !Task.isCancelled else { return }
+                await MainActor.run {
+                    guard let self, self.process?.processIdentifier == pid else { return }
+                    if ports != self.listening { self.listening = ports; self.onChange?() }
+                }
+                try? await Task.sleep(for: .seconds(4))
+            }
+        }
+    }
+
+    private static func listeningPorts(pid: Int32) async -> Set<Int> {
+        await Task.detached {
+            let p = Process()
+            p.executableURL = URL(fileURLWithPath: "/usr/sbin/lsof")
+            p.arguments = ["-a", "-p", "\(pid)", "-nP", "-iTCP", "-sTCP:LISTEN", "-Fn"]
+            let out = Pipe()
+            p.standardOutput = out
+            p.standardError = FileHandle.nullDevice
+            guard (try? p.run()) != nil else { return [] }
+            let data = out.fileHandleForReading.readDataToEndOfFile()
+            p.waitUntilExit()
+            var ports: Set<Int> = []
+            for line in String(decoding: data, as: UTF8.self).split(separator: "\n") where line.hasPrefix("n") {
+                if let port = Int(line.split(separator: ":").last ?? "") { ports.insert(port) }
+            }
+            return ports
+        }.value
     }
 
     private func parse(_ text: String) {
@@ -251,6 +390,9 @@ final class PortForwarder: ObservableObject {
     private func terminated() {
         process = nil
         running = false
+        pollTask?.cancel()
+        pollTask = nil
+        listening = []
         onChange?()
         guard enabled else { return }
         restartTask = Task { [weak self] in
@@ -260,8 +402,9 @@ final class PortForwarder: ObservableObject {
         }
     }
 
-    /// Local ports from the host's LocalForward rules, as ssh resolves them.
-    static func configuredPorts(_ host: String) -> [Int] {
+    /// The host's LocalForward rules, as ssh itself resolves them
+    /// ("localforward 3000 [localhost]:3000").
+    static func configuredRules(_ host: String) -> [ForwardRule] {
         if host == Remote.localHost || host.isEmpty { return [] }
         let p = Process()
         p.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
@@ -274,8 +417,15 @@ final class PortForwarder: ObservableObject {
         p.waitUntilExit()
         return String(decoding: data, as: UTF8.self).split(separator: "\n").compactMap { line in
             let parts = line.split(separator: " ")
-            guard parts.count >= 2, parts[0] == "localforward" else { return nil }
-            return Int(parts[1].split(separator: ":").last ?? "")
+            guard parts.count >= 3, parts[0] == "localforward",
+                  let local = Int(parts[1].split(separator: ":").last ?? "") else { return nil }
+            // "[localhost]:3000", or "host:3000" without the brackets.
+            let target = parts[2]
+            guard let colon = target.lastIndex(of: ":"), let remote = Int(target[target.index(after: colon)...]) else { return nil }
+            let name = target[..<colon].trimmingCharacters(in: CharacterSet(charactersIn: "[]"))
+            return ForwardRule(local: local, host: name.isEmpty ? "localhost" : name, remote: remote, fromConfig: true)
         }
     }
+
+    static func configuredPorts(_ host: String) -> [Int] { configuredRules(host).map(\.local) }
 }

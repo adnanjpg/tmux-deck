@@ -427,7 +427,7 @@ struct ContentView: View {
                 ContentUnavailableView("Terminal closed", systemImage: "xmark.rectangle")
             }
         } else if let tag, let (server, window) = TileResolver.resolve(tag) {
-            windowContent(server: server, window: window, terminalAllowed: terminalOwner(for: tag) == leafID)
+            windowContent(server: server, window: window, tile: leafID)
                 .environmentObject(server)
         } else if let tag, let hash = tag.firstIndex(of: "#"),
                   let server = app.server(String(tag[..<hash])), !server.connected {
@@ -446,15 +446,13 @@ struct ContentView: View {
         }
     }
 
-    @ViewBuilder private func windowContent(server: TmuxModel, window: TmuxWindow, terminalAllowed: Bool) -> some View {
+    @ViewBuilder private func windowContent(server: TmuxModel, window: TmuxWindow, tile: String) -> some View {
         if server.rawTerminal.contains(window.id) || window.state.isRunningProgram {
-            if terminalAllowed {
-                TerminalPane(controller: server.controller(for: window.session), window: window)
-                    .id(window.session)
-            } else {
-                ContentUnavailableView("Terminal shown in another tile", systemImage: "apple.terminal",
-                                       description: Text("A tmux session's raw terminal can be in one tile at a time."))
-            }
+            // Each tile gets its own terminal, so two windows of one tmux session can sit
+            // side by side. Keyed by tile and session: pointing a tile at another session
+            // needs a fresh connection, pointing it at another window doesn't.
+            TerminalPane(controller: server.controller(forTile: tile, session: window.session), window: window)
+                .id(tile + "|" + window.session)
         } else if let claude = window.claude {
             ChatView(window: window, store: server.chatStore(for: claude.sessionID))
                 .id(claude.sessionID)
@@ -465,18 +463,6 @@ struct ContentView: View {
             ConsoleView(window: window)
                 .id(window.id)
         }
-    }
-
-    /// One tmux session has one raw terminal view, so only one tile can show it:
-    /// the focused tile if it's one of them, otherwise the first.
-    private func terminalOwner(for tag: String) -> String? {
-        guard let (server, window) = TileResolver.resolve(tag) else { return nil }
-        let rawTiles = layout.root.leaves.filter { leaf in
-            guard let t = leaf.tag, let (s, w) = TileResolver.resolve(t) else { return false }
-            return s.host == server.host && w.session == window.session
-                && (s.rawTerminal.contains(w.id) || w.state.isRunningProgram)
-        }
-        return rawTiles.first { $0.id == layout.focused }?.id ?? rawTiles.first?.id
     }
 
     // MARK: Toolbar
@@ -722,15 +708,17 @@ struct ServerHeader: View {
         HStack(spacing: 6) {
             Circle().fill(server.connected ? Color.green : Color.orange).frame(width: 7, height: 7)
             Text(server.displayName).font(.headline).foregroundStyle(.primary)
-            if forwarder.enabled {
+            if !forwarder.rules.isEmpty || forwarder.enabled {
                 let f = forwarder
                 Button { showingPorts.toggle() } label: {
-                    Label("\(f.activePorts.count)", systemImage: "arrow.left.arrow.right")
+                    Label(f.enabled ? "\(f.forwardedPorts.count)/\(f.activeRules.count)" : "\(f.rules.count)",
+                          systemImage: "arrow.left.arrow.right")
                         .font(.caption)
-                        .foregroundStyle(f.running ? (f.busyPorts.isEmpty ? Color.green : Color.orange) : Color.secondary)
+                        .foregroundStyle(!f.enabled ? Color.secondary
+                                         : f.running && f.busyPorts.isEmpty ? Color.green : Color.orange)
                 }
                 .buttonStyle(.borderless)
-                .help("Port forwarding")
+                .help(f.enabled ? "\(f.forwardedPorts.count) ports forwarded" : "Port forwarding is off")
                 .popover(isPresented: $showingPorts) { PortsView(forwarder: f) }
             }
             Spacer()
@@ -743,8 +731,7 @@ struct ServerHeader: View {
                     let f = forwarder
                     Divider()
                     Toggle("Port forwarding", isOn: Binding(get: { f.enabled }, set: { f.setEnabled($0) }))
-                        .disabled(f.ports.isEmpty)
-                    if f.enabled { Button("Show forwarded ports…") { showingPorts = true } }
+                    Button("Forwarded ports…") { showingPorts = true }
                 }
                 Divider()
                 Button("Remove server…", role: .destructive) { confirmRemove = true }
@@ -768,38 +755,128 @@ struct ServerHeader: View {
     }
 }
 
+/// The ports forwarded for one server: what's running, and adding or switching off rules.
 struct PortsView: View {
     @ObservedObject var forwarder: PortForwarder
+    @State private var newLocal = ""
+    @State private var newHost = "localhost"
+    @State private var newRemote = ""
+    @State private var addError: String?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("Port forwarding · \(forwarder.host)").font(.headline)
-            Text(forwarder.running
-                 ? "\(forwarder.activePorts.count) of \(forwarder.ports.count) ports forwarded to this Mac."
-                 : "Connecting… (retries every 5 seconds)")
-                .font(.callout).foregroundStyle(.secondary)
-            if !forwarder.busyPorts.isEmpty {
-                Text("\(forwarder.busyPorts.count) ports are already used on this Mac, probably by another SSH session such as VS Code. They'll work once that session closes and forwarding reconnects.")
-                    .font(.caption).foregroundStyle(.orange)
-                    .fixedSize(horizontal: false, vertical: true)
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text("Ports · \(forwarder.host)").font(.headline)
+                Spacer()
+                Toggle("", isOn: Binding(get: { forwarder.enabled }, set: { forwarder.setEnabled($0) }))
+                    .toggleStyle(.switch)
+                    .controlSize(.mini)
+                    .labelsHidden()
+                    .help("Forward these ports to this Mac")
             }
+            Text(status).font(.callout).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
             if let e = forwarder.lastError { Text(e).font(.caption).foregroundStyle(.red) }
-            ScrollView {
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 70), spacing: 6)], alignment: .leading, spacing: 6) {
-                    ForEach(forwarder.ports, id: \.self) { port in
-                        let busy = forwarder.busyPorts.contains(port)
-                        HStack(spacing: 4) {
-                            Circle().fill(busy ? Color.orange : (forwarder.running ? Color.green : Color.secondary)).frame(width: 6, height: 6)
-                            Text("\(port)").font(.caption.monospacedDigit())
+
+            if forwarder.rules.isEmpty {
+                Text("No forwards yet. Add one below, or put LocalForward lines in ~/.ssh/config for \(forwarder.host).")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else {
+                ScrollView {
+                    VStack(spacing: 0) {
+                        ForEach(forwarder.rules) { rule in
+                            row(rule)
+                            Divider()
                         }
-                        .help(busy ? "Already in use on this Mac" : "localhost:\(port) → \(forwarder.host)")
                     }
                 }
+                .frame(maxHeight: 260)
             }
-            .frame(maxHeight: 220)
+
+            Divider()
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Add a port").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                HStack(spacing: 6) {
+                    TextField("3000", text: $newLocal).frame(width: 58)
+                        .help("Port on this Mac")
+                    Text("→").foregroundStyle(.secondary)
+                    TextField("localhost", text: $newHost).frame(width: 96)
+                        .help("Host as seen from \(forwarder.host)")
+                    Text(":").foregroundStyle(.secondary)
+                    TextField("3000", text: $newRemote).frame(width: 58)
+                        .help("Port on that host")
+                    Button("Add", action: add)
+                        .keyboardShortcut(.defaultAction)
+                        .disabled(Int(newLocal.trimmingCharacters(in: .whitespaces)) == nil)
+                }
+                .textFieldStyle(.roundedBorder)
+                .font(.callout.monospacedDigit())
+                if let addError { Text(addError).font(.caption).foregroundStyle(.red) }
+            }
         }
         .padding(16)
-        .frame(width: 340)
+        .frame(width: 400)
+    }
+
+    private var status: String {
+        guard forwarder.enabled else {
+            return "Forwarding is off. \(forwarder.rules.count) rules ready."
+        }
+        guard forwarder.running else { return "Connecting… (retries every 5 seconds)" }
+        var text = "\(forwarder.forwardedPorts.count) of \(forwarder.activeRules.count) ports reach \(forwarder.host)."
+        if !forwarder.busyPorts.isEmpty {
+            text += " \(forwarder.busyPorts.count) are already used on this Mac, probably by another SSH session such as VS Code; they'll bind once that closes."
+        }
+        return text
+    }
+
+    @ViewBuilder private func row(_ rule: ForwardRule) -> some View {
+        let off = forwarder.disabled.contains(rule.local)
+        let busy = forwarder.busyPorts.contains(rule.local)
+        let live = forwarder.listening.contains(rule.local)
+        HStack(spacing: 8) {
+            Circle()
+                .fill(off ? Color.secondary.opacity(0.4)
+                      : busy ? Color.orange
+                      : live ? Color.green : Color.secondary)
+                .frame(width: 7, height: 7)
+            Text("\(rule.local)").font(.callout.monospacedDigit().weight(.medium))
+                .frame(width: 52, alignment: .leading)
+            Text("→ \(rule.host):\(rule.remote)")
+                .font(.callout.monospaced())
+                .foregroundStyle(.secondary)
+                .lineLimit(1).truncationMode(.middle)
+            Spacer(minLength: 4)
+            if rule.fromConfig {
+                Text("config").font(.caption2).foregroundStyle(.tertiary)
+                    .help("From a LocalForward line in ~/.ssh/config")
+            }
+            Button {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString("http://localhost:\(rule.local)", forType: .string)
+            } label: { Image(systemName: "doc.on.doc") }
+                .buttonStyle(.borderless).help("Copy http://localhost:\(rule.local)")
+            Toggle("", isOn: Binding(get: { !off }, set: { forwarder.setEnabled(rule, $0) }))
+                .toggleStyle(.switch).controlSize(.mini).labelsHidden()
+            if !rule.fromConfig {
+                Button(role: .destructive) { forwarder.remove(rule) } label: { Image(systemName: "trash") }
+                    .buttonStyle(.borderless).help("Remove this forward")
+            }
+        }
+        .padding(.vertical, 5)
+        .help(busy ? "Port \(rule.local) is already in use on this Mac" : rule.summary)
+    }
+
+    private func add() {
+        addError = nil
+        guard let local = Int(newLocal.trimmingCharacters(in: .whitespaces)), (1...65535).contains(local) else {
+            addError = "Enter a local port between 1 and 65535."; return
+        }
+        let remote = Int(newRemote.trimmingCharacters(in: .whitespaces)) ?? local
+        guard (1...65535).contains(remote) else { addError = "Enter a remote port between 1 and 65535."; return }
+        forwarder.add(local: local, host: newHost, remote: remote)
+        newLocal = ""; newRemote = ""
     }
 }
 
