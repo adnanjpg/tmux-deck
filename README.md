@@ -104,6 +104,7 @@ and the gotchas that cost real debugging time. Deeper notes live in [`docs/`](do
 | [docs/tmux.md](docs/tmux.md) | tmux view sessions, targeting, pane zoom, capturing screens, portable remote shell |
 | [docs/appkit-and-swiftterm.md](docs/appkit-and-swiftterm.md) | `acceptsFirstMouse`, the vendored SwiftTerm patch, the switcher panel, themes |
 | [docs/testing.md](docs/testing.md) | How to verify a change, and how to test tmux commands without breaking anything |
+| [docs/feature-gaps.md](docs/feature-gaps.md) | What's obviously missing, audited against the code and against comparable tools |
 
 ## Credits
 
