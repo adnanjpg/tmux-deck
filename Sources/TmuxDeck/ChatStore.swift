@@ -82,6 +82,8 @@ final class ChatStore: ObservableObject {
     /// What ⌘F is looking for in this conversation.
     @Published var search = ""
     @Published var searching = false
+    /// Set when a read fails, so a chat that has quietly stopped updating doesn't look live.
+    @Published private(set) var stale: String?
 
     private var offset = 0
     private var toolIndex: [String: Int] = [:]
@@ -180,7 +182,14 @@ final class ChatStore: ObservableObject {
         let argument = assistant == .claude ? sessionID : path
         let script = assistant == .claude ? Self.reader : Self.codexReader
         let result = await remote.run("python3 - \(sq(argument)) \(offset)", input: script, timeout: 30)
-        guard result.ok else { return }
+        guard result.ok else {
+            let message = result.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
+            stale = message.contains("python3") || message.contains("not found")
+                ? "Can't read the transcript: python3 isn't available on that machine."
+                : "Not updating — can't reach the transcript."
+            return
+        }
+        stale = nil
         var fresh: [ChatItem] = []
         var working = items
         var queue = queued

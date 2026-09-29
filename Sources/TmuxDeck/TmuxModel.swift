@@ -185,6 +185,8 @@ final class TmuxModel: ObservableObject, Identifiable {
     @Published var titles: [String: String] = [:]
     /// Windows the person switched to the raw terminal view.
     @Published var rawTerminal: Set<String> = []
+    /// The host answered, but there's no tmux server running on it.
+    @Published private(set) var noTmuxServer = false
     /// Unsent text in each window's message box.
     var drafts: [String: String] = [:]
 
@@ -212,14 +214,27 @@ final class TmuxModel: ObservableObject, Identifiable {
         return nil
     }
 
+    /// How long to wait before the next poll. Two seconds while the server answers; after a
+    /// failure it backs off, because a dead host was otherwise being hit every two seconds with
+    /// a connection that takes fifteen to time out — several in flight at once, forever.
+    private var pollDelay: Double = 2
+    private static let maxPollDelay: Double = 30
+
     func start() {
         guard pollTask == nil else { return }
         pollTask = Task { [weak self] in
             while !Task.isCancelled {
                 await self?.refresh()
-                try? await Task.sleep(for: .seconds(2))
+                let delay = await MainActor.run { self?.pollDelay ?? 2 }
+                try? await Task.sleep(for: .seconds(delay))
             }
         }
+    }
+
+    /// Poll now, whatever the backoff is — for the Retry button.
+    func retryNow() {
+        pollDelay = 2
+        Task { await refresh() }
     }
 
     // MARK: Refresh
@@ -344,12 +359,40 @@ for pane, pid, path in panes:
         let result = await remote.run(Self.pollScript)
         guard result.ok else {
             connected = false
-            lastError = result.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
+            lastError = Self.describe(result)
+            pollDelay = min(pollDelay * 1.6, Self.maxPollDelay)
             return
         }
         connected = true
         lastError = nil
+        pollDelay = 2
+        // tmux isn't running over there, which is a different problem from the host being down.
+        if result.stdout.contains("@@NOSERVER") && !result.stdout.contains(Self.sep) {
+            noTmuxServer = true
+        } else {
+            noTmuxServer = false
+        }
         apply(result.stdout)
+    }
+
+    /// Turns ssh's stderr into something worth showing, and says what kind of failure it is.
+    static func describe(_ result: Remote.Result) -> String {
+        let text = result.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
+        let lower = text.lowercased()
+        if lower.contains("permission denied") || lower.contains("publickey") {
+            return "SSH refused the key. Check your ~/.ssh/config and agent."
+        }
+        if lower.contains("could not resolve") || lower.contains("name or service not known") {
+            return "Can't resolve that host name."
+        }
+        if lower.contains("connection refused") { return "Nothing is listening for SSH on that host." }
+        if lower.contains("operation timed out") || lower.contains("connection timed out") {
+            return "The host didn't answer in time."
+        }
+        if lower.contains("no route to host") || lower.contains("network is unreachable") {
+            return "No route to that host — is the VPN up?"
+        }
+        return text.isEmpty ? "The connection failed." : text
     }
 
     private func apply(_ output: String) {

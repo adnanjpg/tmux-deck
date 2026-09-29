@@ -241,6 +241,11 @@ struct ContentView: View {
         if server.sessions.isEmpty {
             if server.connected {
                 VStack(alignment: .leading, spacing: 6) {
+                    if server.noTmuxServer {
+                        Text("Connected, but tmux isn't running there yet.")
+                            .font(.caption).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                     Button("Restore previous sessions…") { restoring = server }
                         .buttonStyle(.link)
                     Button("Past conversations…") { browsingHistory = server }
@@ -250,11 +255,21 @@ struct ContentView: View {
                 }
                 .selectionDisabled()
             } else {
-                HStack(spacing: 6) {
-                    ProgressView().controlSize(.small)
-                    Text(server.lastError.map { _ in "Can't connect — retrying" } ?? "Connecting…").foregroundStyle(.secondary)
+                // Say what actually went wrong, rather than hiding it in a tooltip.
+                VStack(alignment: .leading, spacing: 5) {
+                    HStack(spacing: 6) {
+                        ProgressView().controlSize(.small)
+                        Text(server.lastError == nil ? "Connecting…" : "Can't connect")
+                            .foregroundStyle(.secondary)
+                    }
+                    if let error = server.lastError {
+                        Text(error)
+                            .font(.caption).foregroundStyle(.orange)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Button("Try now") { server.retryNow() }
+                            .buttonStyle(.link).font(.caption)
+                    }
                 }
-                .help(server.lastError ?? "")
                 .selectionDisabled()
             }
         }

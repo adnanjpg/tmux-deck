@@ -3,6 +3,10 @@ import SwiftTerm
 
 /// One live SSH connection showing one tmux session.
 ///
+/// It reconnects on its own when the link drops — tmux kept everything running on the other
+/// side, so there's nothing to decide — backing off so a host that's properly down isn't
+/// hammered. The Reconnect button is still there for when you don't want to wait.
+///
 /// It attaches to a private view session grouped with the real one, with tmux's
 /// status bar hidden (the sidebar replaces it) and mouse support on (click panes,
 /// drag dividers, scroll history). Switching windows from the sidebar just tells
@@ -15,6 +19,13 @@ final class TerminalController: NSObject, LocalProcessTerminalViewDelegate {
     private(set) var alive = false
     var onStateChange: (() -> Void)?
     private var pendingWindow: String?
+    /// Set while the app wants this terminal up; cleared by `stop()`, so a deliberate close
+    /// doesn't start reconnecting.
+    private var wanted = false
+    private var retry: Task<Void, Never>?
+    private var attempt = 0
+    private(set) var reconnecting = false
+    private var lastWindow: String?
 
     let remote: Remote
 
@@ -48,6 +59,7 @@ final class TerminalController: NSObject, LocalProcessTerminalViewDelegate {
     /// pane is zoomed to fill the view (a tile showing one pane shouldn't show its
     /// neighbours); showing the whole window undoes a zoom this app made.
     func show(windowID: String, paneID: String? = nil) {
+        lastWindow = windowID
         let wasAlive = alive
         if !alive {
             connect(initialWindow: windowID)
@@ -98,6 +110,9 @@ final class TerminalController: NSObject, LocalProcessTerminalViewDelegate {
         env["COLORFGBG"] = Zoom.terminalIsDark ? "15;0" : "0;15"
         env["LANG"] = env["LANG"] ?? "en_US.UTF-8"
         alive = true
+        wanted = true
+        lastWindow = initialWindow ?? lastWindow
+        reconnecting = false
         let command = remote.interactiveCommand(script)
         view.startProcess(executable: command.executable,
                           args: command.args,
@@ -106,13 +121,37 @@ final class TerminalController: NSObject, LocalProcessTerminalViewDelegate {
     }
 
     func reconnect(window: String?) {
+        retry?.cancel()
+        retry = nil
+        attempt = 0
+        reconnecting = false
         view.resetToInitialState()
-        connect(initialWindow: window)
+        connect(initialWindow: window ?? lastWindow)
     }
 
     func stop() {
+        wanted = false
+        retry?.cancel()
+        retry = nil
+        reconnecting = false
         if alive { view.terminate() }
         alive = false
+    }
+
+    /// Waits a bit longer each time, up to half a minute.
+    private func scheduleReconnect() {
+        guard wanted, retry == nil else { return }
+        attempt += 1
+        let delay = min(pow(1.7, Double(attempt)), 30)
+        reconnecting = true
+        onStateChange?()
+        retry = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(delay))
+            guard !Task.isCancelled, let self, self.wanted, !self.alive else { return }
+            self.retry = nil
+            self.view.resetToInitialState()
+            self.connect(initialWindow: self.lastWindow)
+        }
     }
 
     // MARK: LocalProcessTerminalViewDelegate
@@ -125,6 +164,7 @@ final class TerminalController: NSObject, LocalProcessTerminalViewDelegate {
         Task { @MainActor in
             self.alive = false
             self.onStateChange?()
+            self.scheduleReconnect()
         }
     }
 }

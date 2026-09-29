@@ -7,6 +7,7 @@ struct TerminalPane: View {
     let controller: TerminalController
     let window: TmuxWindow
     @State private var alive = true
+    @State private var reconnecting = false
 
     var body: some View {
         terminal
@@ -20,11 +21,12 @@ struct TerminalPane: View {
             .overlay {
                 if !alive {
                     ContentUnavailableView {
-                        Label("Disconnected", systemImage: "wifi.exclamationmark")
+                        Label(reconnecting ? "Reconnecting…" : "Disconnected",
+                              systemImage: "wifi.exclamationmark")
                     } description: {
                         Text("Your tmux windows are still running on \(controller.remote.displayName).")
                     } actions: {
-                        Button("Reconnect") { controller.reconnect(window: window.windowID) }
+                        Button("Reconnect now") { controller.reconnect(window: window.windowID) }
                             .keyboardShortcut(.defaultAction)
                     }
                     .background(.regularMaterial)
@@ -32,7 +34,10 @@ struct TerminalPane: View {
             }
             .onAppear {
                 DispatchQueue.main.async { controller.view.window?.makeFirstResponder(controller.view) }
-                controller.onStateChange = { alive = controller.alive }
+                controller.onStateChange = {
+                    alive = controller.alive
+                    reconnecting = controller.reconnecting
+                }
                 controller.show(windowID: window.windowID, paneID: window.isPane ? window.paneID : nil)
                 alive = controller.alive
             }

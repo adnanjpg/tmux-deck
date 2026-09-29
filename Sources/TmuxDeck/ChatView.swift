@@ -19,6 +19,18 @@ struct ChatView: View {
     var body: some View {
         VStack(spacing: 0) {
             if !turns.isEmpty { chatHeader }
+            if let stale = store.stale {
+                HStack(spacing: 8) {
+                    Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                    Text(stale).font(fonts.caption)
+                    Spacer(minLength: 4)
+                    Button("Try now") { Task { await store.catchUp() } }
+                        .buttonStyle(.borderless).font(fonts.caption)
+                }
+                .padding(.horizontal, 16).padding(.vertical, 6)
+                .background(Color.orange.opacity(0.12))
+                .overlay(alignment: .bottom) { Divider() }
+            }
             if store.searching { searchBar }
             ScrollViewReader { proxy in
             ScrollView {
