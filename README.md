@@ -17,6 +17,10 @@ tmux stays the backend. Your sessions keep running on the server when the app cl
 - **Plain shell windows as a console:** selectable output you can search with Edit → Find, and the same input box.
 - **Every tmux action as a button or menu item:** new window or session, split, even out panes, zoom, swap, move a pane into its own window or into another window, move windows between sessions, rename, close. You can also drag panes and windows around in the sidebar.
 - **A raw terminal view** (⌥⌘T) for anything interactive, like vim or htop.
+- **Browse and edit the files** (⇧⌘E). A tree of the folder the open window is working in, on its server. Files open in a tile beside the chat, with syntax highlighting, find, undo and ⌘S. Saving refuses if the assistant changed the file since you opened it, and offers you the choice.
+- **See what a session changed** (⇧⌘G). Every session is its own worktree, so this shows the whole diff of that worktree against the branch it lands on — `dev`, `main`, whatever `origin/HEAD` says — including work that isn't committed yet and files that aren't tracked yet. Jump between the repository's other worktrees from the same picker.
+- **Reopen a conversation that finished** (⇧⌘O). Everything either CLI has on disk, searchable by title, first message or folder, shown read-only.
+- **Copy and search in the chat.** Copy a message, a code block, a tool's output, a whole turn or the whole conversation; ⌘F finds anything in the conversation you're looking at.
 - **Codex CLI windows, as a chat too.** Start Codex in a remote tmux session or a local plain terminal from the New menu. Codex windows get the same native chat view as Claude, read from Codex's own session transcript, with the real terminal one keystroke away (⌥⌘T). Codex keeps its own configuration, approval and sandbox settings.
 - **Restore lost sessions.** The app remembers each server's sessions and windows. If tmux loses them (a crash, a reboot), the sidebar offers Restore previous sessions: pick windows and it recreates them in their folders, resuming each Claude conversation with `claude --resume`. It also uses the session records Claude Code leaves on the server, so it can recover Claude windows it never saw. Also in each server's ••• menu.
 - **VS Code themes.** Settings → Themes lists every theme in VS Code, Cursor and your installed VS Code extensions (following `include` chains), plus Match VS Code to follow VS Code's current theme, and Import… for a theme `.json` or `.vsix`. A theme colors the chat, sidebar, input, tool rows, code blocks (with syntax highlighting from the theme's token colors), the console and the raw terminal (16 ANSI colors, cursor, selection).
@@ -58,6 +62,11 @@ To update, `git pull` and run `./build-app.sh` again.
 | New terminal window | ⌘T |
 | New plain Mac terminal | ⇧⌘T |
 | Bigger / smaller / normal text | ⌘+ / ⌘− / ⌘0 |
+| Files | ⇧⌘E |
+| Changes against the base branch | ⇧⌘G |
+| Past conversations | ⇧⌘O |
+| Find in this conversation | ⌘F |
+| Keyboard shortcuts | ⌘/ |
 | Split right / down | ⌘D / ⇧⌘D |
 | Copy the whole window | ⇧⌘C |
 | Show as raw terminal | ⌥⌘T |
@@ -87,6 +96,7 @@ The app doesn't restart itself after `./build-app.sh` — whatever was open keep
 ## Limitations
 
 - The chat view shows the main conversation only, not subagents' inner steps.
+- There's one window. Tiles split inside it, up to six, but you can't put a conversation on a second monitor.
 - Claude's status and permission choices are read from its screen and session record, so a future Claude Code release could need small fixes.
 - Codex's chat is read from its session files, so a future Codex release could need small fixes. Restoring a Codex window starts a new session rather than resuming the old conversation.
 - If you type into Claude from somewhere else, the half-typed text doesn't appear in the app's box. Sent messages always show up.
@@ -104,6 +114,7 @@ and the gotchas that cost real debugging time. Deeper notes live in [`docs/`](do
 | [docs/tmux.md](docs/tmux.md) | tmux view sessions, targeting, pane zoom, capturing screens, portable remote shell |
 | [docs/appkit-and-swiftterm.md](docs/appkit-and-swiftterm.md) | `acceptsFirstMouse`, the vendored SwiftTerm patch, the switcher panel, themes |
 | [docs/testing.md](docs/testing.md) | How to verify a change, and how to test tmux commands without breaking anything |
+| [docs/files-and-diffs.md](docs/files-and-diffs.md) | The Files, Changes and Past conversations views, and how saving avoids clobbering an agent |
 | [docs/feature-gaps.md](docs/feature-gaps.md) | What's obviously missing, audited against the code and against comparable tools |
 
 ## Credits
