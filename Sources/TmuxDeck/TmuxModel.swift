@@ -437,7 +437,6 @@ for pane, pid, path in panes:
         connected = true
         lastError = nil
         pollDelay = 2
-        await checkTools()
         // tmux isn't running over there, which is a different problem from the host being down.
         if result.stdout.contains("@@NOSERVER") && !result.stdout.contains(Self.sep) {
             noTmuxServer = true
@@ -450,13 +449,20 @@ for pane, pid, path in panes:
     private var toolsChecked = false
 
     /// What's installed over there. Checked once per connection, not every poll.
+    ///
+    /// Through a **login shell**: `ssh host 'command -v claude'` misses anything a shell only
+    /// puts on PATH when it logs in (nvm, a version manager, ~/.local/bin), which made this
+    /// claim tools were missing that plainly weren't. Anything visibly running is trusted over
+    /// the check, since a window running `codex` settles the question.
     private func checkTools() async {
         guard !toolsChecked else { return }
         toolsChecked = true
-        let result = await remote.run(
-            "for t in python3 claude codex gh; do command -v $t >/dev/null 2>&1 || echo $t; done")
+        let probe = "for t in python3 claude codex gh; do command -v $t >/dev/null 2>&1 || echo $t; done"
+        let result = await remote.run("\"$SHELL\" -lc \(sq(probe)) 2>/dev/null")
         guard result.ok else { toolsChecked = false; return }
+        let running = Set(sessions.flatMap(\.windows).flatMap { [$0] + $0.paneItems }.map(\.command))
         let missing = result.stdout.split(separator: "\n").map(String.init)
+            .filter { tool in !running.contains { $0.contains(tool) } }
         if missing != missingTools { missingTools = missing }
     }
 
@@ -645,6 +651,7 @@ for pane, pid, path in panes:
 
         notifyStateChanges()
         followTmuxSelection(viewActive)
+        Task { await checkTools() }
         pruneTerminals(liveTiles: Set(LayoutModel.shared.root.leaves.map(\.id)))
 
         if selection == nil || selectedWindow == nil {
