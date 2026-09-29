@@ -175,6 +175,7 @@ struct ContentView: View {
                         Menu {
                             Button("New terminal") { openPlain(.shell) }
                             Button("New Claude") { openPlain(.claude) }
+                            Button("New Codex") { openPlain(.codex) }
                             Divider()
                             Button("Hide this section") { plain.enabled = false }
                                 .disabled(!plain.terminals.isEmpty)
@@ -354,8 +355,9 @@ struct ContentView: View {
     }
 
     @ViewBuilder private func sessionMenu(_ session: String, _ m: TmuxModel) -> some View {
-        Button("New Claude window") { m.newWindow(claude: true, in: session) }
-        Button("New terminal window") { m.newWindow(claude: false, in: session) }
+        Button("New Claude window") { m.newWindow(assistant: .claude, in: session) }
+        Button("New Codex window") { m.newWindow(assistant: .codex, in: session) }
+        Button("New terminal window") { m.newWindow(assistant: nil, in: session) }
         Divider()
         Button("Rename session…") { target = m; renameText = session; renaming = .session(session) }
         Button("Close session…", role: .destructive) { target = m; closingSession = session }
@@ -374,6 +376,7 @@ struct ContentView: View {
                 Button("Add server…") { addingServer = true }
                 Button("New Mac terminal (no tmux)") { openPlain(.shell) }
                 Button("New Claude on this Mac (no tmux)") { openPlain(.claude) }
+                Button("New Codex on this Mac (no tmux)") { openPlain(.codex) }
                 Button("New session on \(model.displayName)…") { target = model; renameText = ""; newSessionPrompt = true }
             } label: {
                 Image(systemName: "plus")
@@ -481,15 +484,16 @@ struct ContentView: View {
     @ToolbarContentBuilder private var toolbar: some ToolbarContent {
         ToolbarItemGroup(placement: .primaryAction) {
             Menu {
-                Button("New Claude window") { model.newWindow(claude: true) }
-                Button("New terminal window") { model.newWindow(claude: false) }
+                Button("New Claude window") { model.newWindow(assistant: .claude) }
+                Button("New Codex window") { model.newWindow(assistant: .codex) }
+                Button("New terminal window") { model.newWindow(assistant: nil) }
                 Divider()
                 Button("New session…") { target = model; renameText = ""; newSessionPrompt = true }
                 Button("Add server…") { addingServer = true }
             } label: {
                 Label("New", systemImage: "plus")
             } primaryAction: {
-                model.newWindow(claude: true)
+                model.newWindow(assistant: .claude)
             }
             .help("New Claude window (⌘N)")
 
@@ -560,7 +564,7 @@ struct WindowRow: View {
     }
 
     private var subtitle: String {
-        var parts = [window.state.label]
+        var parts = [window.assistant == .codex ? "Codex" : window.state.label]
         if title != window.folder { parts.append(window.folder) }
         if !compact && window.panes > 1 { parts.append("\(window.panes) panes") }
         if compact && window.zoomed { parts.append("zoomed") }
@@ -568,17 +572,21 @@ struct WindowRow: View {
     }
 
     @ViewBuilder private var icon: some View {
-        switch window.state {
-        case .claudeWorking:
-            Image(systemName: "sparkle").foregroundStyle(.blue).symbolEffect(.pulse)
-        case .claudeNeedsYou:
-            Image(systemName: "exclamationmark.bubble.fill").foregroundStyle(.orange)
-        case .claudeReady:
-            Image(systemName: "sparkle").foregroundStyle(.secondary)
-        case .shell:
-            Image(systemName: "terminal").foregroundStyle(.secondary)
-        case .running:
-            Image(systemName: "gearshape").foregroundStyle(.secondary)
+        if window.assistant == .codex {
+            Image(systemName: CodingAssistant.codex.systemImage).foregroundStyle(.secondary)
+        } else {
+            switch window.state {
+            case .claudeWorking:
+                Image(systemName: "sparkle").foregroundStyle(.blue).symbolEffect(.pulse)
+            case .claudeNeedsYou:
+                Image(systemName: "exclamationmark.bubble.fill").foregroundStyle(.orange)
+            case .claudeReady:
+                Image(systemName: "sparkle").foregroundStyle(.secondary)
+            case .shell:
+                Image(systemName: "terminal").foregroundStyle(.secondary)
+            case .running:
+                Image(systemName: "gearshape").foregroundStyle(.secondary)
+            }
         }
     }
 

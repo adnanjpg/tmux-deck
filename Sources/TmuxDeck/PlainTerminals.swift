@@ -2,12 +2,27 @@ import AppKit
 import SwiftTerm
 import SwiftUI
 
-/// A normal terminal on this Mac, without tmux: a shell (or Claude) running
+/// A normal terminal on this Mac, without tmux: a shell, Claude, or Codex running
 /// directly in the app, like a Terminal.app tab. It ends when the app quits;
 /// the app reopens it in the same folder next time.
 @MainActor
 final class PlainTerminal: NSObject, ObservableObject, Identifiable, LocalProcessTerminalViewDelegate {
-    enum Kind: String, Codable { case shell, claude }
+    enum Kind: String, Codable {
+        case shell
+        case claude
+        case codex
+
+        var assistant: CodingAssistant? {
+            switch self {
+            case .shell: nil
+            case .claude: .claude
+            case .codex: .codex
+            }
+        }
+
+        var displayName: String { assistant?.displayName ?? "Terminal" }
+        var systemImage: String { assistant?.systemImage ?? "terminal" }
+    }
 
     let id: String
     let kind: Kind
@@ -22,6 +37,7 @@ final class PlainTerminal: NSObject, ObservableObject, Identifiable, LocalProces
     var title: String {
         if let name, !name.isEmpty { return name }
         if kind == .claude { return claudeTitle ?? "Claude · \((folder as NSString).lastPathComponent)" }
+        if kind == .codex { return "Codex · \((folder as NSString).lastPathComponent)" }
         return (folder as NSString).lastPathComponent.isEmpty ? "Terminal" : (folder as NSString).lastPathComponent
     }
 
@@ -48,8 +64,8 @@ final class PlainTerminal: NSObject, ObservableObject, Identifiable, LocalProces
         env["COLORTERM"] = "truecolor"
         env["LANG"] = env["LANG"] ?? "en_US.UTF-8"
         let shell = env["SHELL"] ?? "/bin/zsh"
-        // Claude runs inside a login shell, so when you quit Claude you're left at a prompt.
-        let args = kind == .claude ? ["-lc", "claude; exec \(shell) -l"] : ["-l"]
+        // Coding CLIs run inside a login shell, so quitting one leaves a prompt behind.
+        let args = kind.assistant.map { ["-lc", "\($0.command); exec \(shell) -l"] } ?? ["-l"]
         running = true
         view.startProcess(executable: shell, args: args, environment: env.map { "\($0.key)=\($0.value)" },
                           execName: nil, currentDirectory: FileManager.default.fileExists(atPath: folder) ? folder : NSHomeDirectory())
@@ -219,12 +235,12 @@ struct PlainTerminalRow: View {
 
     var body: some View {
         HStack(spacing: 8) {
-            Image(systemName: terminal.kind == .claude ? "sparkle" : "terminal")
+            Image(systemName: terminal.kind.systemImage)
                 .foregroundStyle(.secondary)
                 .frame(width: 18)
             VStack(alignment: .leading, spacing: 1) {
                 Text(terminal.title).lineLimit(1)
-                Text((terminal.running ? (terminal.kind == .claude ? "Claude" : "Terminal") : "Ended")
+                Text((terminal.running ? terminal.kind.displayName : "Ended")
                      + " · " + (terminal.folder as NSString).abbreviatingWithTildeInPath)
                     .font(.caption).foregroundStyle(.secondary).lineLimit(1)
             }

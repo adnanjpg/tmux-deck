@@ -2,6 +2,33 @@ import AppKit
 import Foundation
 import UserNotifications
 
+/// Coding CLIs that Tmux Deck can start in a tmux or plain-terminal window.
+/// Claude has an additional native chat renderer; Codex stays in its own TUI.
+enum CodingAssistant: String, CaseIterable {
+    case claude
+    case codex
+
+    init?(command: String) {
+        self.init(rawValue: command.lowercased())
+    }
+
+    var command: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .claude: "Claude"
+        case .codex: "Codex"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .claude: "sparkle"
+        case .codex: "chevron.left.forwardslash.chevron.right"
+        }
+    }
+}
+
 /// What a window is doing, as far as the sidebar is concerned.
 enum WindowState: Equatable {
     case claudeWorking
@@ -66,6 +93,11 @@ struct TmuxWindow: Identifiable, Hashable {
     var folder: String {
         let last = (path as NSString).lastPathComponent
         return last.isEmpty ? path : last
+    }
+
+    var assistant: CodingAssistant? {
+        if claude != nil { return .claude }
+        return CodingAssistant(command: command)
     }
 
     static func == (a: TmuxWindow, b: TmuxWindow) -> Bool {
@@ -795,6 +827,9 @@ final class TmuxModel: ObservableObject, Identifiable {
         var claudeSessionID: String?
         var id: String { claudeSessionID ?? "\(session)|\(order)|\(path)" }
         var isClaude: Bool { claudeSessionID != nil }
+        var assistant: CodingAssistant? {
+            isClaude ? .claude : CodingAssistant(command: command)
+        }
     }
 
     private var snapshotKey: String { "snapshot.\(host)" }
@@ -852,7 +887,8 @@ final class TmuxModel: ObservableObject, Identifiable {
     }
 
     /// Recreates windows: each in its folder, in its tmux session (created if needed).
-    /// Claude windows resume their conversation; shells just open in the folder.
+    /// Claude windows resume their conversation, Codex starts a new interactive session,
+    /// and shells open in their folder.
     func restore(_ windows: [SavedWindow]) {
         var script = ""
         var seen: [String] = []
@@ -870,6 +906,8 @@ final class TmuxModel: ObservableObject, Identifiable {
             }
             if let cid = w.claudeSessionID {
                 script += "tmux send-keys -t \"$id\" \(sq("claude --resume " + cid)) Enter\n"
+            } else if w.assistant == .codex {
+                script += "tmux send-keys -t \"$id\" codex Enter\n"
             }
         }
         Task {
@@ -923,16 +961,21 @@ final class TmuxModel: ObservableObject, Identifiable {
         return "\(view):\(w.windowID)"
     }
 
-    func newWindow(claude: Bool, in session: String? = nil) {
-        guard let sessionName = session ?? selectedWindow?.session ?? sessions.first?.name else {
-            newSession(named: "main"); return
-        }
+    func newWindow(assistant: CodingAssistant?, in session: String? = nil) {
+        let sessionName = session ?? selectedWindow?.session ?? sessions.first?.name ?? "main"
         // Target the view session so the new window opens in the folder you're looking at.
         let targetSession = terminals[sessionName]?.viewSession ?? sessionName
-        let launch = claude ? "tmux send-keys -t \"$id\" claude Enter" : ":"
-        let script = """
-        id=$(tmux new-window -d -P -F '#{window_id}' -c '#{pane_current_path}' -t \(sq(targetSession + ":"))) && \(launch) && echo "$id"
-        """
+        let launch = assistant.map { "tmux send-keys -t \"$id\" \(sq($0.command)) Enter" } ?? ":"
+        let script: String
+        if sessions.contains(where: { $0.name == sessionName }) {
+            script = """
+            id=$(tmux new-window -d -P -F '#{window_id}' -c '#{pane_current_path}' -t \(sq(targetSession + ":"))) && \(launch) && echo "$id"
+            """
+        } else {
+            script = """
+            id=$(tmux new-session -d -s \(sq(sessionName)) -P -F '#{window_id}') && \(launch) && echo "$id"
+            """
+        }
         Task {
             let result = await tmux(script)
             let id = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)

@@ -63,7 +63,7 @@ into split-view tiles on demand.
 | Claude chat | `ChatView.swift`, `ChatStore.swift` | Reads the transcript, renders turns/markdown/tables |
 | Input | `ComposeBar.swift` | The message box, image paste, Claude's question cards |
 | Raw terminal | `TerminalController.swift`, `TerminalPane.swift` | SwiftTerm attached to a tmux view session |
-| Plain terminals | `PlainTerminals.swift` | Shells/Claude on this Mac with no tmux at all |
+| Plain terminals | `PlainTerminals.swift` | Shells, Claude, or Codex on this Mac with no tmux at all |
 | Console | `ConsoleView.swift` | Non-Claude tmux window as selectable text |
 | Status bar | `StatusBar.swift`, `StatusLineEditor.swift` | Claude's status line as native chips |
 | Task switcher | `TabSwitcher.swift`, `AnsiThumbnail.swift` | ⌃⇥ HUD with rendered screen thumbnails |

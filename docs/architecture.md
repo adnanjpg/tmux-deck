@@ -15,7 +15,7 @@ TmuxDeckApp (App.swift)
                 ├── ChatView         a Claude window (reads its transcript)
                 ├── TerminalPane     raw tmux terminal (SwiftTerm over SSH)
                 ├── ConsoleView      non-Claude tmux window as selectable text
-                └── PlainTerminalView a local shell/Claude with no tmux
+                └── PlainTerminalView a local shell, Claude, or Codex with no tmux
 ```
 
 Singletons (all `@MainActor`, all `ObservableObject`):
@@ -87,8 +87,9 @@ TmuxModel.start()
 enum WindowState { case claudeWorking, claudeNeedsYou, claudeReady, shell, running(String) }
 ```
 
-`.running` (a foreground program that isn't a shell or Claude — vim, cloudflared…) forces the raw
-terminal view, since those need a real terminal.
+`.running` (a foreground program that isn't a shell or Claude — Codex, vim, cloudflared…) forces
+the raw terminal view, since those need a real terminal. Claude alone gets the native chat renderer;
+Codex keeps its full interactive CLI UI and its existing configuration.
 
 ## Persisted state (`UserDefaults`, domain `io.github.tmuxdeck`)
 

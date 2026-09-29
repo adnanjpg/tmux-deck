@@ -21,9 +21,11 @@ struct TmuxDeckApp: App {
         .windowToolbarStyle(.unified)
         .commands {
             CommandGroup(replacing: .newItem) {
-                Button("New Claude window") { model?.newWindow(claude: true) }
+                Button("New Claude window") { model?.newWindow(assistant: .claude) }
                     .keyboardShortcut("n")
-                Button("New terminal window") { model?.newWindow(claude: false) }
+                Button("New Codex window") { model?.newWindow(assistant: .codex) }
+                    .keyboardShortcut("n", modifiers: [.command, .option])
+                Button("New terminal window") { model?.newWindow(assistant: nil) }
                     .keyboardShortcut("t")
                 Divider()
                 Button("New Mac terminal (no tmux)") {
@@ -32,6 +34,9 @@ struct TmuxDeckApp: App {
                 .keyboardShortcut("t", modifiers: [.command, .shift])
                 Button("New Claude on this Mac (no tmux)") {
                     LayoutModel.shared.show(PlainTerminalStore.shared.new(.claude).tag)
+                }
+                Button("New Codex on this Mac (no tmux)") {
+                    LayoutModel.shared.show(PlainTerminalStore.shared.new(.codex).tag)
                 }
                 Divider()
                 Button("Close") { LayoutModel.shared.requestCloseFocused() }
