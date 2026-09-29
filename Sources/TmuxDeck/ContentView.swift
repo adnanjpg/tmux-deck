@@ -47,6 +47,17 @@ struct ContentView: View {
 
     private var acting: TmuxModel { target ?? model }
 
+    /// Opens the diff for the folder of whatever window is focused.
+    private func showChanges() {
+        guard let tag = layout.focusedTag, let (server, window) = TileResolver.resolve(tag),
+              window.path.hasPrefix("/") else {
+            model.flash("Pick a window in a repository first.")
+            return
+        }
+        layout.drop(tag: DiffTile.tag(host: server.host, path: window.path),
+                    onto: layout.focused, zone: .right)
+    }
+
     var body: some View {
         main
             .inspector(isPresented: $showPRs) {
@@ -309,6 +320,9 @@ struct ContentView: View {
     @ViewBuilder private func windowMenu(_ window: TmuxWindow, _ m: TmuxModel) -> some View {
         Button("Open to the right") { layout.drop(tag: "\(m.host)#\(window.id)", onto: layout.focused, zone: .right) }
         Button("Open below") { layout.drop(tag: "\(m.host)#\(window.id)", onto: layout.focused, zone: .bottom) }
+        Button("Show changes") {
+            layout.drop(tag: DiffTile.tag(host: m.host, path: window.path), onto: layout.focused, zone: .right)
+        }
         Divider()
         Button("Rename…") { target = m; renameText = window.title; renaming = .window(window) }
         Divider()
@@ -426,6 +440,10 @@ struct ContentView: View {
     @ViewBuilder private func tileContent(leafID: String, tag: String?) -> some View {
         if let tag, let file = FileTile.resolve(tag) {
             FileEditorView(host: file.host, path: file.path).id(tag)
+        } else if let tag, let diff = DiffTile.resolve(tag) {
+            DiffView(host: diff.host, path: diff.path,
+                     store: DiffStores.shared.store(host: diff.host, path: diff.path))
+                .id(tag)
         } else if let tag, tag.hasPrefix("plain#") {
             if let t = plain.terminal(forTag: tag) {
                 PlainTerminalView(terminal: t).id(t.id)
@@ -517,6 +535,11 @@ struct ContentView: View {
                 Label("Files", systemImage: "folder")
             }
             .help("Browse files on this server (⇧⌘E)")
+
+            Button { showChanges() } label: {
+                Label("Changes", systemImage: "plusminus")
+            }
+            .help("What this window's worktree changes, against its base branch (⇧⌘G)")
 
             Toggle(isOn: $showPRs) {
                 Label("Pull requests", systemImage: "arrow.triangle.pull")

@@ -315,8 +315,8 @@ final class LayoutModel: ObservableObject {
     /// ⌘W: ask to close whatever the focused tile is showing.
     func requestCloseFocused() {
         guard let tag = focusedTag else { return }
-        if FileTile.resolve(tag) != nil {
-            // A file tile shows a file; closing it closes nothing else, so don't ask.
+        if FileTile.resolve(tag) != nil || DiffTile.resolve(tag) != nil {
+            // These tiles only show something; closing one closes nothing else, so don't ask.
             isSplit ? close(focused) : clearTag(forTag: tag)
         } else if let t = PlainTerminalStore.shared.terminal(forTag: tag) {
             confirmClose = .plainTerminal(t, tag: tag)
@@ -530,7 +530,11 @@ private struct TileHeader: View {
                 .font(.caption)
                 .foregroundStyle(.tertiary)
                 .help("Drag to move this tile")
-            if let file = tag.flatMap(FileTile.resolve) {
+            if let diff = tag.flatMap(DiffTile.resolve) {
+                Text("Changes").font(.callout.weight(focused ? .semibold : .regular)).lineLimit(1)
+                Text((diff.path as NSString).lastPathComponent)
+                    .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+            } else if let file = tag.flatMap(FileTile.resolve) {
                 Text((file.path as NSString).lastPathComponent)
                     .font(.callout.weight(focused ? .semibold : .regular)).lineLimit(1)
                 Text(file.host == Remote.localHost ? "This Mac" : file.host)

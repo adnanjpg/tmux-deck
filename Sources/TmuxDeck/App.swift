@@ -45,6 +45,8 @@ struct TmuxDeckApp: App {
             CommandGroup(after: .sidebar) {
                 Button("Files") { UserDefaults.standard.set(!UserDefaults.standard.bool(forKey: "showFiles"), forKey: "showFiles") }
                     .keyboardShortcut("e", modifiers: [.command, .shift])
+                Button("Changes") { model?.showChangesForFocused() }
+                    .keyboardShortcut("g", modifiers: [.command, .shift])
                 Divider()
                 Button("Zoom In") { Zoom.shared.zoomIn() }
                     .keyboardShortcut("+", modifiers: [.command])

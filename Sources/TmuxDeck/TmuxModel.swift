@@ -1394,6 +1394,18 @@ for pane, pid, path in panes:
         }
     }
 
+    /// Opens the diff for the folder of whatever window is focused.
+    func showChangesForFocused() {
+        let layout = LayoutModel.shared
+        guard let tag = layout.focusedTag, let (server, window) = TileResolver.resolve(tag),
+              window.path.hasPrefix("/") else {
+            flash("Pick a window in a repository first.")
+            return
+        }
+        layout.drop(tag: DiffTile.tag(host: server.host, path: window.path),
+                    onto: layout.focused, zone: .right)
+    }
+
     func selectRelative(_ delta: Int) {
         let all = sessions.flatMap(\.windows)
         guard !all.isEmpty else { return }
