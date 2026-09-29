@@ -65,6 +65,11 @@ struct TmuxDeckApp: App {
                 Button("Toggle Full Screen") { AppDelegate.toggleFullScreen() }
                     .keyboardShortcut("f", modifiers: [.command, .control])
             }
+            CommandGroup(replacing: .help) {
+                Button("Keyboard Shortcuts") { NotificationCenter.default.post(name: .showShortcuts, object: nil) }
+                    .keyboardShortcut("/", modifiers: [.command])
+                Link("Tmux Deck on GitHub", destination: URL(string: "https://github.com/adnanjpg/tmux-deck")!)
+            }
             CommandMenu("Tmux") {
                 Button("Next tab") { TabSwitcherController.shared.advance(1) }
                     .keyboardShortcut(.tab, modifiers: [.control])

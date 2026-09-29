@@ -14,6 +14,7 @@ struct ContentView: View {
     @State private var restoring: TmuxModel?
     @State private var browsingHistory: TmuxModel?
     @State private var sidebarFilter = ""
+    @State private var showingShortcuts = false
     @FocusState private var filterFocused: Bool
     @ObservedObject private var plain = PlainTerminalStore.shared
     @State private var renamingPlain: PlainTerminal?
@@ -71,6 +72,10 @@ struct ContentView: View {
             }
             .sheet(isPresented: $addingServer) { AddServerView(sheet: true) }
             .sheet(item: $restoring) { server in RestoreView(server: server) }
+            .sheet(isPresented: $showingShortcuts) { ShortcutsView() }
+            .onReceive(NotificationCenter.default.publisher(for: .showShortcuts)) { _ in
+                showingShortcuts = true
+            }
             .sheet(item: $browsingHistory) { server in
                 HistoryView(host: server.host, store: HistoryStores.shared.store(for: server.host))
             }
@@ -244,6 +249,22 @@ struct ContentView: View {
         .safeAreaInset(edge: .bottom) { statusBar }
     }
 
+    /// Says what's missing on a server before you run into it — python3's absence in particular
+    /// used to show up only as a chat that never loaded.
+    @ViewBuilder private func missingToolsNote(_ server: TmuxModel) -> some View {
+        let tools = server.missingTools
+        let explain: [String: String] = [
+            "python3": "no chat view",
+            "claude": "can't start Claude",
+            "codex": "can't start Codex",
+            "gh": "no pull requests",
+        ]
+        Text("Not installed on \(server.displayName): "
+             + tools.map { "\($0) (\(explain[$0] ?? "missing"))" }.joined(separator: ", "))
+            .font(.caption).foregroundStyle(.orange)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+
     private var sidebarSearch: some View {
         HStack(spacing: 6) {
             Image(systemName: "magnifyingglass").font(.caption).foregroundStyle(.tertiary)
@@ -282,6 +303,9 @@ struct ContentView: View {
 
     @ViewBuilder private func serverRows(_ server: TmuxModel) -> some View {
         let tag = { (id: String) in "\(server.host)#\(id)" }
+        if !server.missingTools.isEmpty {
+            missingToolsNote(server).selectionDisabled()
+        }
         if server.sessions.isEmpty {
             if server.connected {
                 VStack(alignment: .leading, spacing: 6) {
@@ -480,6 +504,7 @@ struct ContentView: View {
                 Button("New session on \(model.displayName)…") { target = model; renameText = ""; newSessionPrompt = true }
             } label: {
                 Image(systemName: "plus")
+                    .accessibilityLabel("New window, terminal or server")
             }
             .menuStyle(.borderlessButton)
             .menuIndicator(.hidden)
@@ -689,14 +714,17 @@ struct WindowRow: View {
 
     @ViewBuilder private var icon: some View {
         if window.assistant == .codex {
-            switch window.state {
-            case .claudeWorking:
-                Image(systemName: CodingAssistant.codex.systemImage).foregroundStyle(.blue).symbolEffect(.pulse)
-            case .claudeNeedsYou:
-                Image(systemName: "exclamationmark.bubble.fill").foregroundStyle(.orange)
-            default:
-                Image(systemName: CodingAssistant.codex.systemImage).foregroundStyle(.secondary)
+            Group {
+                switch window.state {
+                case .claudeWorking:
+                    Image(systemName: CodingAssistant.codex.systemImage).foregroundStyle(.blue).symbolEffect(.pulse)
+                case .claudeNeedsYou:
+                    Image(systemName: "exclamationmark.bubble.fill").foregroundStyle(.orange)
+                default:
+                    Image(systemName: CodingAssistant.codex.systemImage).foregroundStyle(.secondary)
+                }
             }
+            .accessibilityLabel("Codex, \(window.state.label)")
         } else {
             switch window.state {
             case .claudeWorking:
@@ -845,6 +873,7 @@ struct ServerHeader: View {
     var body: some View {
         HStack(spacing: 6) {
             Circle().fill(server.connected ? Color.green : Color.orange).frame(width: 7, height: 7)
+                .accessibilityLabel(server.connected ? "Connected" : "Not connected")
             Text(server.displayName).font(.headline).foregroundStyle(.primary)
             if !forwarder.rules.isEmpty || forwarder.enabled {
                 let f = forwarder
@@ -878,7 +907,7 @@ struct ServerHeader: View {
                 Divider()
                 Button("Remove server…", role: .destructive) { confirmRemove = true }
             } label: {
-                Image(systemName: "ellipsis.circle")
+                Image(systemName: "ellipsis.circle").accessibilityLabel("Server actions")
             }
             .menuStyle(.borderlessButton)
             .menuIndicator(.hidden)
@@ -1108,27 +1137,36 @@ struct StateBadge: View {
     var compact = false
 
     var body: some View {
+        // Compact badges are icon-and-colour only, which is nothing to a screen reader —
+        // each one says in words what it means.
         switch state {
         case .claudeWorking:
             pill(color: .blue) {
                 ProgressView().controlSize(.mini).tint(.blue)
                 if !compact { Text("Working") }
             }
-            .help("Claude is working")
+            .help("Working")
+            .accessibilityElement()
+            .accessibilityLabel("Working")
         case .claudeNeedsYou:
             pill(color: .orange) {
                 Image(systemName: "exclamationmark.bubble.fill")
                 if !compact { Text("Needs you") }
             }
-            .help("Claude is waiting for your answer")
+            .help("Waiting for your answer")
+            .accessibilityElement()
+            .accessibilityLabel("Needs your answer")
         case .claudeReady where done:
             pill(color: .green) {
                 Image(systemName: "checkmark.circle.fill")
                 Text("Done")
             }
-            .help("Claude finished while you were away")
+            .help("Finished while you were away")
+            .accessibilityElement()
+            .accessibilityLabel("Finished while you were away")
         case .claudeReady where !compact:
             pill(color: .secondary) { Text("Ready") }
+                .accessibilityLabel("Ready")
         default:
             EmptyView()
         }

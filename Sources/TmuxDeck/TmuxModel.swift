@@ -190,6 +190,9 @@ final class TmuxModel: ObservableObject, Identifiable {
     @Published var rawTerminal: Set<String> = []
     /// The host answered, but there's no tmux server running on it.
     @Published private(set) var noTmuxServer = false
+    /// Tools this server is missing. python3 is the one that matters: without it there's no
+    /// chat view at all, and before this the failure was silent.
+    @Published private(set) var missingTools: [String] = []
     /// Unsent text in each window's message box.
     /// Unsent text per window, kept across quits — losing a half-written message because you
     /// closed the app is the kind of small betrayal you remember.
@@ -394,8 +397,15 @@ def goal_of(path):
     if not goal:
         return ""
     for line in goal.splitlines():
-        if line.strip():
-            return "\t" + line.strip()[:90]
+        line = line.strip()
+        if not line:
+            continue
+        # A whole opening sentence makes an unwieldy window title; keep it to a label.
+        if len(line) > 52:
+            cut = line[:52]
+            space = cut.rfind(" ")
+            line = (cut[:space] if space > 24 else cut).rstrip(" ,.;:") + "…"
+        return "\t" + line
     return ""
 
 taken = set()
@@ -427,6 +437,7 @@ for pane, pid, path in panes:
         connected = true
         lastError = nil
         pollDelay = 2
+        await checkTools()
         // tmux isn't running over there, which is a different problem from the host being down.
         if result.stdout.contains("@@NOSERVER") && !result.stdout.contains(Self.sep) {
             noTmuxServer = true
@@ -434,6 +445,19 @@ for pane, pid, path in panes:
             noTmuxServer = false
         }
         apply(result.stdout)
+    }
+
+    private var toolsChecked = false
+
+    /// What's installed over there. Checked once per connection, not every poll.
+    private func checkTools() async {
+        guard !toolsChecked else { return }
+        toolsChecked = true
+        let result = await remote.run(
+            "for t in python3 claude codex gh; do command -v $t >/dev/null 2>&1 || echo $t; done")
+        guard result.ok else { toolsChecked = false; return }
+        let missing = result.stdout.split(separator: "\n").map(String.init)
+        if missing != missingTools { missingTools = missing }
     }
 
     /// Turns ssh's stderr into something worth showing, and says what kind of failure it is.

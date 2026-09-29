@@ -72,6 +72,7 @@ struct ComposeBar: View {
                     Button { model.send(keys: ["Escape"], to: window) } label: {
                         Image(systemName: "stop.fill")
                     }
+                    .accessibilityLabel("Stop \(assistant.displayName)")
                     .help("Stop \(assistant.displayName) (Esc)")
                     .controlSize(.large)
                     .disabled(window.state != .claudeWorking)
@@ -80,6 +81,7 @@ struct ComposeBar: View {
                     Image(systemName: "arrow.up")
                         .fontWeight(.semibold)
                 }
+                .accessibilityLabel("Send message")
                 .buttonStyle(.borderedProminent)
                 .controlSize(.large)
                 .disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && attachments.isEmpty)

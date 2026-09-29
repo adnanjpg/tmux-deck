@@ -216,6 +216,7 @@ print(json.dumps({"sessions": items[:LIMIT]}))
 extension Notification.Name {
     static let openHistory = Notification.Name("TmuxDeckOpenHistory")
     static let findInChat = Notification.Name("TmuxDeckFindInChat")
+    static let showShortcuts = Notification.Name("TmuxDeckShowShortcuts")
 }
 
 @MainActor
