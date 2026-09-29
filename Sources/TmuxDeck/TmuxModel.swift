@@ -260,7 +260,7 @@ final class TmuxModel: ObservableObject, Identifiable {
     /// Runs on the work machine, reading "<pane> <pane pid> <folder>" lines and printing
     /// "@@CODEX <pane> <session id> <rollout path>" for each pane it can place.
     private static let codexFinder = #"""
-import json, os, glob, subprocess, sys, time
+import json, os, glob, re, subprocess, sys, time
 
 panes, seen_panes = [], set()
 for line in sys.stdin.read().splitlines():
@@ -296,6 +296,14 @@ def started(pid):
     try: return time.mktime(time.strptime(out, "%a %b %d %H:%M:%S %Y"))
     except ValueError: return 0
 
+STAMP = re.compile(r"rollout-(\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2})-")
+def created(path):
+    """Rollout file names carry the local time the session started."""
+    m = STAMP.search(os.path.basename(path))
+    if not m: return 0
+    try: return time.mktime(time.strptime(m.group(1), "%Y-%m-%dT%H-%M-%S"))
+    except ValueError: return 0
+
 rollouts = glob.glob(os.path.expanduser("~/.codex/sessions/*/*/*/rollout-*.jsonl"))
 meta = {}
 for path in sorted(rollouts, key=os.path.getmtime, reverse=True)[:400]:
@@ -304,27 +312,32 @@ for path in sorted(rollouts, key=os.path.getmtime, reverse=True)[:400]:
             head = json.loads(fh.readline().decode("utf-8", "replace"))
     except Exception:
         continue
-    p = head.get("payload") or {}
     if head.get("type") != "session_meta": continue
+    p = head.get("payload") or {}
+    # Codex writes a rollout per thread, including the subagents and guardian reviews it
+    # spawns — all in the same folder, often written more recently than the conversation
+    # itself. Only the thread the user is typing into is the one to show.
+    if p.get("parent_thread_id") or p.get("parent_id"): continue
+    if (p.get("thread_source") or "user") != "user": continue
+    if not isinstance(p.get("source", "cli"), str): continue
     meta[path] = (p.get("cwd") or "", p.get("session_id") or p.get("id") or "", os.path.getmtime(path))
 
-# Newest rollout started in the pane's folder wins; a folder with two Codex sessions in it
-# hands the busier one to the pane that started later, which is the best guess available.
 taken = set()
-found = []
 for pane, pid, path in panes:
     codex = find_codex(int(pid))
     if not codex: continue
     since = started(codex) - 5
-    best = None
+    best, best_score = None, None
     for f, (cwd, sid, mtime) in meta.items():
         if f in taken or cwd != path or mtime < since: continue
-        if best is None or mtime > meta[best][2]: best = f
+        # The rollout made when this process started is the right one; a resumed session
+        # keeps an older name, so fall back to whichever has been written most recently.
+        gap = abs(created(f) - since)
+        score = (0, gap) if gap <= 180 else (1, -mtime)
+        if best_score is None or score < best_score: best, best_score = f, score
     if best:
         taken.add(best)
-        found.append((pane, meta[best][1], best))
-for pane, sid, f in found:
-    print("@@CODEX %s %s %s" % (pane, sid, f))
+        print("@@CODEX %s %s %s" % (pane, meta[best][1], best))
 """#
 
     func refresh() async {
@@ -394,10 +407,17 @@ for pane, sid, f in found:
             // and the window must not flip away from the chat. A record that's missing
             // for one refresh (file mid-write) is bridged for 20 seconds.
             var claudeInfo = claudeByPane[paneID]?.info
+            let isShell = ["bash", "zsh", "sh", "fish"].contains(command)
             if let info = claudeInfo {
                 lastClaude[paneID] = (info, Date())
-            } else if let last = lastClaude[paneID], Date().timeIntervalSince(last.1) < 20 {
+            } else if let last = lastClaude[paneID], Date().timeIntervalSince(last.1) < 20 || !isShell {
+                // A record that's missing for one refresh (the file is mid-write) is bridged
+                // for 20 seconds. Beyond that, keep the chat as long as the pane isn't back
+                // at a shell prompt: Claude exiting leaves a shell, anything else is Claude
+                // running a build in the foreground, and the view must not flip away.
                 claudeInfo = last.0
+            } else {
+                lastClaude[paneID] = nil
             }
             let isClaude = claudeInfo != nil || command.contains("claude")
             // Codex is bridged the same way as Claude: the rollout can take a moment to appear,
@@ -405,16 +425,18 @@ for pane, sid, f in found:
             var codexInfo = codexByPane[paneID]
             if let info = codexInfo {
                 lastCodex[paneID] = (info, Date())
-            } else if command.contains("codex"), let last = lastCodex[paneID], Date().timeIntervalSince(last.1) < 60 {
+            } else if let last = lastCodex[paneID], !isShell, Date().timeIntervalSince(last.1) < 600 {
                 codexInfo = last.0
+            } else if isShell {
+                lastCodex[paneID] = nil
             }
             let state: WindowState
             if isClaude {
                 let plain = raw.map(stripANSI).filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
                 state = Self.claudeState(Array(plain.suffix(12)), info: claudeInfo)
-            } else if command.contains("codex") {
+            } else if codexInfo != nil || command.contains("codex") {
                 state = Self.codexState(raw.map(stripANSI))
-            } else if ["bash", "zsh", "sh", "fish"].contains(command) {
+            } else if isShell {
                 state = .shell
             } else {
                 state = .running(command)

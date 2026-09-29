@@ -5,13 +5,14 @@ import SwiftUI
 /// search output like any document, and type commands in the box underneath.
 struct ConsoleView: View {
     @Environment(\.theme) private var theme
+    @Environment(\.fonts) private var fonts
     @EnvironmentObject private var model: TmuxModel
     let window: TmuxWindow
     @State private var output = ""
 
     var body: some View {
         VStack(spacing: 0) {
-            OutputTextView(text: output, theme: theme)
+            OutputTextView(text: output, theme: theme, font: fonts.nsMono)
             Divider()
             ComposeBar(window: window)
                 .id(window.id)
@@ -33,6 +34,7 @@ struct ConsoleView: View {
 struct OutputTextView: NSViewRepresentable {
     let text: String
     let theme: AppTheme
+    var font: NSFont = .monospacedSystemFont(ofSize: 12, weight: .regular)
 
     func makeNSView(context: Context) -> NSScrollView {
         let scroll = NSScrollView()
@@ -45,7 +47,6 @@ struct OutputTextView: NSViewRepresentable {
         tv.isSelectable = true
         tv.usesFindBar = true
         tv.isIncrementalSearchingEnabled = true
-        tv.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
         tv.textContainerInset = NSSize(width: 16, height: 14)
         tv.backgroundColor = .textBackgroundColor
         tv.isVerticallyResizable = true
@@ -60,6 +61,7 @@ struct OutputTextView: NSViewRepresentable {
 
     func updateNSView(_ scroll: NSScrollView, context: Context) {
         guard let tv = scroll.documentView as? NSTextView else { return }
+        if tv.font != font { tv.font = font }
         tv.backgroundColor = theme.terminalBackground ?? theme.background
         tv.textColor = theme.terminalForeground ?? theme.foreground ?? .textColor
         guard tv.string != text else { return }

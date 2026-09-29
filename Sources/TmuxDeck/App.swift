@@ -43,6 +43,14 @@ struct TmuxDeckApp: App {
                     .keyboardShortcut("w", modifiers: [.command])
             }
             CommandGroup(after: .sidebar) {
+                Button("Zoom In") { Zoom.shared.zoomIn() }
+                    .keyboardShortcut("+", modifiers: [.command])
+                    .keyboardShortcut("=", modifiers: [.command])
+                Button("Zoom Out") { Zoom.shared.zoomOut() }
+                    .keyboardShortcut("-", modifiers: [.command])
+                Button("Actual Size") { Zoom.shared.reset() }
+                    .keyboardShortcut("0", modifiers: [.command])
+                Divider()
                 Button("Choose Theme…") { NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil) }
                 Button("Toggle Full Screen") { AppDelegate.toggleFullScreen() }
                     .keyboardShortcut("f", modifiers: [.command, .control])
@@ -93,6 +101,7 @@ struct RootView: View {
     @ObservedObject private var themes = ThemeManager.shared
     @ObservedObject private var plainStore = PlainTerminalStore.shared
     @ObservedObject private var updateWatcher = UpdateWatcher.shared
+    @ObservedObject private var zoom = Zoom.shared
 
     var body: some View {
         let theme = themes.theme
@@ -101,6 +110,7 @@ struct RootView: View {
             content
         }
         .environment(\.theme, theme)
+        .environment(\.fonts, zoom.font)
         .tint(theme.tint)
         .foregroundStyle(theme.fg ?? Color.primary)
         .preferredColorScheme(theme.isDark.map { $0 ? .dark : .light })
@@ -168,7 +178,8 @@ struct SettingsView: View {
                     .font(.caption).foregroundStyle(.secondary)
             }
             Section("Terminal") {
-                Stepper("Font size: \(Int(fontSize)) pt", value: $fontSize, in: 9...24)
+                Stepper("Text size: \(Int(fontSize)) pt (⌘+ / ⌘− / ⌘0)", value: $fontSize, in: 8...28)
+                    .onChange(of: fontSize) { _, new in Zoom.shared.set(new) }
                 Text("Applies the next time you open the app.")
                     .font(.caption).foregroundStyle(.secondary)
             }

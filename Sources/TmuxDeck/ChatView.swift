@@ -3,6 +3,7 @@ import SwiftUI
 /// A Claude window shown as a normal Mac chat: your messages, Claude's replies,
 /// and the tools it used. Claude keeps running in tmux; this just reads its log.
 struct ChatView: View {
+    @Environment(\.fonts) private var fonts
     @Environment(\.theme) private var theme
     @EnvironmentObject private var model: TmuxModel
     let window: TmuxWindow
@@ -74,7 +75,7 @@ struct ChatView: View {
                 if store.refreshing && store.loaded {
                     HStack(spacing: 6) {
                         ProgressView().controlSize(.mini)
-                        Text("Updating").font(.caption).foregroundStyle(.secondary)
+                        Text("Updating").font(fonts.caption).foregroundStyle(.secondary)
                     }
                     .padding(.horizontal, 10).padding(.vertical, 5)
                     .background(.regularMaterial, in: Capsule())
@@ -120,7 +121,7 @@ extension ChatView {
         return HStack(spacing: 10) {
             StateBadge(state: window.state, done: model.unseenDone.contains(window.id))
             Text("\(turns.count) \(turns.count == 1 ? "turn" : "turns")")
-                .font(.caption)
+                .font(fonts.caption)
                 .foregroundStyle(.secondary)
             Spacer()
             Button {
@@ -203,6 +204,7 @@ extension ChatItem {
 }
 
 struct TurnView: View {
+    @Environment(\.fonts) private var fonts
     let turn: Turn
     @ObservedObject var store: ChatStore
 
@@ -212,11 +214,11 @@ struct TurnView: View {
                 MessageCard(role: .you, collapsed: binding(user.id), summary: cmd, detail: "command") {
                     VStack(alignment: .leading, spacing: 8) {
                         Label(cmd, systemImage: cmd.hasPrefix("!") ? "terminal" : "command")
-                            .font(.system(.body, design: .monospaced))
+                            .font(fonts.monoBody)
                             .textSelection(.enabled)
                         if let out = user.result, !out.isEmpty {
                             Text(out)
-                                .font(.system(.callout, design: .monospaced))
+                                .font(fonts.mono)
                                 .foregroundStyle(.secondary)
                                 .textSelection(.enabled)
                                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -261,6 +263,7 @@ struct TurnView: View {
 }
 
 struct MessageCard<Content: View>: View {
+    @Environment(\.fonts) private var fonts
     @Environment(\.theme) private var theme
     enum Role: Equatable {
         case you
@@ -295,13 +298,13 @@ struct MessageCard<Content: View>: View {
                             .lineLimit(1)
                             .truncationMode(.tail)
                         if !detail.isEmpty {
-                            Text(detail).font(.caption).foregroundStyle(.tertiary).fixedSize()
+                            Text(detail).font(fonts.caption).foregroundStyle(.tertiary).fixedSize()
                         }
                     }
                     Spacer(minLength: 8)
                     Image(systemName: "chevron.down")
                         .rotationEffect(.degrees(collapsed ? -90 : 0))
-                        .font(.caption.weight(.semibold))
+                        .font(fonts.caption.weight(.semibold))
                         .foregroundStyle(.tertiary)
                 }
                 .contentShape(Rectangle())
@@ -338,6 +341,7 @@ struct MessageCard<Content: View>: View {
 /// Your message the moment you send it, greyed out until Claude's log confirms it.
 /// If it gets stuck, it says why and offers a fix.
 struct SendingMessage: View {
+    @Environment(\.fonts) private var fonts
     @EnvironmentObject private var model: TmuxModel
     let message: PendingMessage
     let window: TmuxWindow
@@ -359,7 +363,7 @@ struct SendingMessage: View {
                     if reason == nil && !slow {
                         HStack(spacing: 4) {
                             ProgressView().controlSize(.mini)
-                            Text("Sending").font(.caption)
+                            Text("Sending").font(fonts.caption)
                         }
                         .foregroundStyle(.secondary)
                     }
@@ -374,7 +378,7 @@ struct SendingMessage: View {
                 if reason != nil || slow {
                     VStack(alignment: .leading, spacing: 8) {
                         Label(reason ?? "Claude hasn't picked this up yet.", systemImage: "exclamationmark.triangle.fill")
-                            .font(.callout)
+                            .font(fonts.callout)
                             .foregroundStyle(.orange)
                             .fixedSize(horizontal: false, vertical: true)
                         HStack(spacing: 8) {
@@ -404,11 +408,12 @@ struct SendingMessage: View {
 }
 
 struct ImageBadge: View {
+    @Environment(\.fonts) private var fonts
     let count: Int
 
     var body: some View {
         Label("\(count) image\(count == 1 ? "" : "s") attached", systemImage: "photo")
-            .font(.callout)
+            .font(fonts.callout)
             .foregroundStyle(.secondary)
             .padding(.horizontal, 8).padding(.vertical, 4)
             .background(Capsule().fill(Color.secondary.opacity(0.1)))
@@ -416,13 +421,14 @@ struct ImageBadge: View {
 }
 
 struct QueuedMessage: View {
+    @Environment(\.fonts) private var fonts
     let text: String
 
     var body: some View {
         HStack(alignment: .top, spacing: 8) {
             Image(systemName: "clock").foregroundStyle(.secondary).frame(width: 22)
             VStack(alignment: .leading, spacing: 4) {
-                Text("Queued — Claude will read this next").font(.caption).foregroundStyle(.secondary)
+                Text("Queued — Claude will read this next").font(fonts.caption).foregroundStyle(.secondary)
                 Text(text).textSelection(.enabled).foregroundStyle(.secondary)
             }
         }
@@ -435,6 +441,7 @@ struct QueuedMessage: View {
 }
 
 struct ChatRow: View {
+    @Environment(\.fonts) private var fonts
     let item: ChatItem
 
     var body: some View {
@@ -456,11 +463,11 @@ struct ChatRow: View {
         case .thinking(let text):
             ThinkingRow(text: text)
         case .command(let cmd):
-            Label(cmd, systemImage: "command").font(.system(.callout, design: .monospaced)).foregroundStyle(.secondary)
+            Label(cmd, systemImage: "command").font(fonts.mono).foregroundStyle(.secondary)
         case .recap(let text):
             VStack(alignment: .leading, spacing: 6) {
                 Label("While you were away", systemImage: "clock.arrow.circlepath")
-                    .font(.callout.weight(.semibold))
+                    .font(fonts.callout.weight(.semibold))
                     .foregroundStyle(.secondary)
                 MarkdownText(text)
             }
@@ -469,7 +476,7 @@ struct ChatRow: View {
             .background(Color.accentColor.opacity(0.07), in: RoundedRectangle(cornerRadius: 10))
         case .note(let text):
             Text(text)
-                .font(.caption)
+                .font(fonts.caption)
                 .foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity)
         }
@@ -478,6 +485,7 @@ struct ChatRow: View {
 
 /// Claude's live status line, like the one under its output in the terminal.
 struct ActivityView: View {
+    @Environment(\.fonts) private var fonts
     let activity: ClaudeActivity
     let working: Bool
 
@@ -492,12 +500,12 @@ struct ActivityView: View {
                     .foregroundStyle(working ? .primary : .secondary)
                     .textSelection(.enabled)
             }
-            .font(working ? .body : .callout)
+            .font(working ? fonts.body : fonts.callout)
             if working, !activity.details.isEmpty {
                 VStack(alignment: .leading, spacing: 3) {
                     ForEach(Array(activity.details.enumerated()), id: \.offset) { _, line in
                         Text(line)
-                            .font(.callout)
+                            .font(fonts.callout)
                             .foregroundStyle(line.hasPrefix("☒") || line.hasPrefix("✔") ? .secondary : .primary)
                             .strikethrough(line.hasPrefix("☒"))
                             .lineLimit(2)
@@ -512,6 +520,7 @@ struct ActivityView: View {
 }
 
 struct ThinkingRow: View {
+    @Environment(\.fonts) private var fonts
     let text: String
     @State private var open = false
 
@@ -521,14 +530,14 @@ struct ThinkingRow: View {
                 HStack(spacing: 6) {
                     Image(systemName: "brain").foregroundStyle(.tertiary)
                     Text("Thinking").foregroundStyle(.secondary)
-                    Image(systemName: open ? "chevron.down" : "chevron.right").font(.caption).foregroundStyle(.tertiary)
+                    Image(systemName: open ? "chevron.down" : "chevron.right").font(fonts.caption).foregroundStyle(.tertiary)
                 }
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             if open {
                 Text(text)
-                    .font(.callout)
+                    .font(fonts.callout)
                     .italic()
                     .foregroundStyle(.secondary)
                     .textSelection(.enabled)
@@ -539,6 +548,7 @@ struct ThinkingRow: View {
 }
 
 struct ToolRow: View {
+    @Environment(\.fonts) private var fonts
     @Environment(\.theme) private var theme
     let name: String
     let summary: String
@@ -557,14 +567,14 @@ struct ToolRow: View {
                         .frame(width: 16)
                     Text(name).fontWeight(.medium)
                     Text(displaySummary)
-                        .font(.system(.callout, design: .monospaced))
+                        .font(fonts.mono)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                         .truncationMode(.middle)
                     if added + removed > 0 {
-                        Text("+\(added)").foregroundStyle(.green).font(.caption.monospacedDigit())
+                        Text("+\(added)").foregroundStyle(.green).font(fonts.caption.monospacedDigit())
                         if removed > 0 {
-                            Text("−\(removed)").foregroundStyle(.red).font(.caption.monospacedDigit())
+                            Text("−\(removed)").foregroundStyle(.red).font(fonts.caption.monospacedDigit())
                         }
                     }
                     Spacer(minLength: 0)
@@ -572,7 +582,7 @@ struct ToolRow: View {
                         ProgressView().controlSize(.mini)
                     } else {
                         Image(systemName: open ? "chevron.down" : "chevron.right")
-                            .font(.caption)
+                            .font(fonts.caption)
                             .foregroundStyle(.tertiary)
                     }
                 }
@@ -583,7 +593,7 @@ struct ToolRow: View {
             if open {
                 ScrollView {
                     Text(detail)
-                        .font(.system(.caption, design: .monospaced))
+                        .font(fonts.monoCaption)
                         .textSelection(.enabled)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(10)
@@ -679,6 +689,7 @@ struct TableView: View {
 /// Renders Claude's Markdown: paragraphs with inline formatting, headings,
 /// and code blocks. Each block is selectable like normal text.
 struct MarkdownText: View {
+    @Environment(\.fonts) private var fonts
     @Environment(\.theme) private var theme
     let blocks: [Block]
 
@@ -782,13 +793,13 @@ struct MarkdownText: View {
                     }
                 case .heading(let s, let level):
                     Text(Self.inline(s))
-                        .font(level <= 2 ? .title3.weight(.semibold) : .headline)
+                        .font(level <= 2 ? fonts.title3 : fonts.headline)
                         .textSelection(.enabled)
                         .padding(.top, 4)
                 case .code(let s):
                     ScrollView(.horizontal) {
                         Text(SyntaxHighlighter.highlight(s, theme: theme))
-                            .font(.system(.callout, design: .monospaced))
+                            .font(fonts.mono)
                             .textSelection(.enabled)
                             .padding(12)
                     }

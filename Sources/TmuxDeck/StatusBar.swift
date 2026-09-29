@@ -104,6 +104,7 @@ struct StatusChip: Identifiable, Hashable {
 
 /// Claude Code's status line as native chips under the input box.
 struct StatusBar: View {
+    @Environment(\.fonts) private var fonts
     @EnvironmentObject private var model: TmuxModel
     let window: TmuxWindow
     @AppStorage("statusbar.version") private var refresh = 0   // bumps when toggles change
@@ -131,7 +132,7 @@ struct StatusBar: View {
             }
             .sheet(isPresented: $editing) { StatusLineEditor(window: window) }
         }
-        .font(.caption)
+        .font(fonts.caption)
         .padding(.horizontal, 12)
         .padding(.bottom, 8)
         .frame(minHeight: 22)
@@ -146,6 +147,7 @@ struct StatusBar: View {
 
 /// One chip in the status bar. Most chips open a menu or a details popover.
 private struct ChipView: View {
+    @Environment(\.fonts) private var fonts
     @EnvironmentObject private var model: TmuxModel
     let chip: StatusChip
     let window: TmuxWindow
@@ -161,7 +163,7 @@ private struct ChipView: View {
                     }
                 }
                 Divider()
-                Text("Modes that aren't enabled for this session are skipped").font(.caption)
+                Text("Modes that aren't enabled for this session are skipped").font(fonts.caption)
             } label: {
                 capsule { Label(chip.text, systemImage: ClaudeMode.from(chip.text).icon) }
             }
@@ -300,6 +302,7 @@ enum ClaudeMode: CaseIterable {
 
 /// Current models first; older ones tucked into a collapsed Legacy section.
 struct ModelPicker: View {
+    @Environment(\.fonts) private var fonts
     let current: String
     var onPick: (String) -> Void
     @State private var showLegacy = false
@@ -331,8 +334,8 @@ struct ModelPicker: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("Model").font(.headline)
-            Text("Now: \(current)").font(.caption).foregroundStyle(.secondary)
+            Text("Model").font(fonts.headline)
+            Text("Now: \(current)").font(fonts.caption).foregroundStyle(.secondary)
             Divider()
             ForEach(Self.currentModels, id: \.id) { row($0) }
             DisclosureGroup("Legacy models", isExpanded: $showLegacy) {
@@ -373,6 +376,7 @@ struct ModelPicker: View {
 
 /// Usage gauges from the status line, plus Claude's full /usage screen on request.
 struct UsageDetails: View {
+    @Environment(\.fonts) private var fonts
     @EnvironmentObject private var model: TmuxModel
     let window: TmuxWindow
     @State private var full: String?
@@ -381,7 +385,7 @@ struct UsageDetails: View {
     var body: some View {
         let chips = StatusChip.parse(model.statusLines[window.id] ?? []).filter { $0.kind == .context || $0.kind == .usage }
         VStack(alignment: .leading, spacing: 10) {
-            Text("Usage").font(.headline)
+            Text("Usage").font(fonts.headline)
             ForEach(chips) { chip in
                 VStack(alignment: .leading, spacing: 3) {
                     HStack {
@@ -390,7 +394,7 @@ struct UsageDetails: View {
                         Text("\(Int(chip.percent ?? 0))%").monospacedDigit()
                     }
                     ProgressView(value: min((chip.percent ?? 0) / 100, 1)).tint(color(chip.percent))
-                    if let reset = chip.detail { Text("Resets at \(reset)").font(.caption).foregroundStyle(.secondary) }
+                    if let reset = chip.detail { Text("Resets at \(reset)").font(fonts.caption).foregroundStyle(.secondary) }
                 }
             }
             Divider()
@@ -407,7 +411,7 @@ struct UsageDetails: View {
                 if loading { ProgressView().controlSize(.small) }
             }
             if window.state == .claudeWorking {
-                Text("Available when Claude isn't working.").font(.caption).foregroundStyle(.secondary)
+                Text("Available when Claude isn't working.").font(fonts.caption).foregroundStyle(.secondary)
             }
         }
         .padding(14)
@@ -437,20 +441,21 @@ struct UsageDetails: View {
 
 /// Every Claude session on this server, with its status. Click one to jump to it.
 struct AgentsList: View {
+    @Environment(\.fonts) private var fonts
     @EnvironmentObject private var model: TmuxModel
     var onPick: (TmuxWindow) -> Void
 
     var body: some View {
         let items = model.sessions.flatMap(\.windows).flatMap { $0.paneItems.isEmpty ? [$0] : $0.paneItems }.filter(\.state.isClaude)
         VStack(alignment: .leading, spacing: 8) {
-            Text("Claude sessions on \(model.displayName)").font(.headline)
+            Text("Claude sessions on \(model.displayName)").font(fonts.headline)
             ForEach(items) { w in
                 Button { onPick(w) } label: {
                     HStack(spacing: 8) {
                         Circle().fill(dot(w.state)).frame(width: 8, height: 8)
                         VStack(alignment: .leading, spacing: 1) {
                             Text(model.displayTitle(w)).lineLimit(1)
-                            Text("\(w.state.label) · \(w.session) · \(w.folder)").font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                            Text("\(w.state.label) · \(w.session) · \(w.folder)").font(fonts.caption).foregroundStyle(.secondary).lineLimit(1)
                         }
                         Spacer()
                     }
@@ -474,6 +479,7 @@ struct AgentsList: View {
 
 /// Background commands Claude started in this conversation (Bash with run_in_background).
 struct BackgroundShells: View {
+    @Environment(\.fonts) private var fonts
     @EnvironmentObject private var model: TmuxModel
     @ObservedObject var store: ChatStore
     let window: TmuxWindow
@@ -483,14 +489,14 @@ struct BackgroundShells: View {
     var body: some View {
         let shells = store.items.filter { $0.background == true }.suffix(10).reversed()
         VStack(alignment: .leading, spacing: 8) {
-            Text("Background commands").font(.headline)
+            Text("Background commands").font(fonts.headline)
             if shells.isEmpty { Text("None in the loaded part of this chat.").foregroundStyle(.secondary) }
             ForEach(Array(shells)) { item in
                 if case .tool(_, let summary, _, _) = item.kind {
                     VStack(alignment: .leading, spacing: 3) {
                         Text(summary).font(.system(size: 11, design: .monospaced)).lineLimit(3).textSelection(.enabled)
                         if let r = item.result {
-                            Text(r.split(separator: "\n").prefix(2).joined(separator: " ")).font(.caption).foregroundStyle(.secondary).lineLimit(2)
+                            Text(r.split(separator: "\n").prefix(2).joined(separator: " ")).font(fonts.caption).foregroundStyle(.secondary).lineLimit(2)
                         }
                     }
                     Divider()
@@ -512,7 +518,7 @@ struct BackgroundShells: View {
                 if loading { ProgressView().controlSize(.small) }
             }
             if window.state == .claudeWorking {
-                Text("The live list is available when Claude isn't working.").font(.caption).foregroundStyle(.secondary)
+                Text("The live list is available when Claude isn't working.").font(fonts.caption).foregroundStyle(.secondary)
             }
         }
         .padding(14)
@@ -522,6 +528,7 @@ struct BackgroundShells: View {
 
 /// "PR #2268" in Claude's mode line, as a live PR chip for the window's repository.
 struct PRStatusChip: View {
+    @Environment(\.fonts) private var fonts
     @EnvironmentObject private var model: TmuxModel
     let text: String
     let window: TmuxWindow
@@ -542,12 +549,13 @@ struct PRStatusChip: View {
 }
 
 private struct StatusBarSettings: View {
+    @Environment(\.fonts) private var fonts
     @Binding var refresh: Int
     var onEdit: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Show in the status bar").font(.headline)
+            Text("Show in the status bar").font(fonts.headline)
             ForEach(StatusChip.Kind.allCases, id: \.self) { kind in
                 Toggle(kind.label, isOn: Binding(
                     get: {
@@ -559,7 +567,7 @@ private struct StatusBarSettings: View {
             }
             Divider()
             Text("The bar mirrors Claude Code's own status line.")
-                .font(.caption)
+                .font(fonts.caption)
                 .foregroundStyle(.secondary)
                 .frame(width: 260, alignment: .leading)
             Button("Edit Claude's status line…", action: onEdit)

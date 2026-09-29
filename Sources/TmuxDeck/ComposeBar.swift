@@ -6,6 +6,7 @@ import SwiftUI
 /// When the box is empty, navigation keys go straight to the window so Claude's
 /// menus (arrows, Enter, Esc, Tab) keep working without clicking into the terminal.
 struct ComposeBar: View {
+    @Environment(\.fonts) private var fonts
     @Environment(\.theme) private var theme
     @EnvironmentObject private var model: TmuxModel
     let window: TmuxWindow
@@ -40,7 +41,7 @@ struct ComposeBar: View {
                             HStack(spacing: 6) {
                                 Text(suggestion).foregroundStyle(.tertiary).lineLimit(1)
                                 Text("Tab")
-                                    .font(.caption2.weight(.medium))
+                                    .font(fonts.caption2.weight(.medium))
                                     .foregroundStyle(.secondary)
                                     .padding(.horizontal, 5).padding(.vertical, 1)
                                     .overlay(RoundedRectangle(cornerRadius: 4).strokeBorder(.tertiary))
@@ -85,7 +86,7 @@ struct ComposeBar: View {
                 .help("Send (Enter)")
             }
         }
-        .font(.system(size: 13))
+        .font(fonts.body)
         .padding(12)
         .background(theme.panel)
         .onDrop(of: [.fileURL, .image], isTargeted: $dropTargeted) { providers in
@@ -111,7 +112,7 @@ struct ComposeBar: View {
             HStack(alignment: .top, spacing: 8) {
                 Image(systemName: "exclamationmark.bubble.fill").foregroundStyle(.orange)
                 Text(model.promptQuestions[window.id] ?? "Claude is asking")
-                    .font(.callout.weight(.semibold))
+                    .font(fonts.callout.weight(.semibold))
                     .fixedSize(horizontal: false, vertical: true)
                     .textSelection(.enabled)
             }
@@ -390,6 +391,7 @@ final class ComposeNSTextView: NSTextView {
 /// Claude's AskUserQuestion as a proper card: the question, each option with its
 /// explanation, your own answer, and "Chat about this".
 struct QuestionCard: View {
+    @Environment(\.fonts) private var fonts
     @EnvironmentObject private var model: TmuxModel
     let questions: [AskQuestion]
     let screenOptions: [PromptOption]
@@ -418,16 +420,16 @@ struct QuestionCard: View {
             HStack(spacing: 8) {
                 Image(systemName: "exclamationmark.bubble.fill").foregroundStyle(.orange)
                 if let header = q.header, !header.isEmpty {
-                    Text(header).font(.caption.weight(.semibold))
+                    Text(header).font(fonts.caption.weight(.semibold))
                         .padding(.horizontal, 7).padding(.vertical, 2)
                         .background(Capsule().fill(Color.orange.opacity(0.15)))
                         .foregroundStyle(.orange)
                 }
                 if questions.count > 1 {
-                    Text("Question \(i + 1) of \(questions.count)").font(.caption).foregroundStyle(.secondary)
+                    Text("Question \(i + 1) of \(questions.count)").font(fonts.caption).foregroundStyle(.secondary)
                 }
                 if q.multiSelect == true {
-                    Text("Choose all that apply").font(.caption).foregroundStyle(.secondary)
+                    Text("Choose all that apply").font(fonts.caption).foregroundStyle(.secondary)
                 }
                 Spacer()
             }
@@ -446,7 +448,7 @@ struct QuestionCard: View {
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(option.label).fontWeight(.medium)
                                 if let d = option.description, !d.isEmpty {
-                                    Text(d).font(.callout).foregroundStyle(.secondary)
+                                    Text(d).font(fonts.callout).foregroundStyle(.secondary)
                                         .fixedSize(horizontal: false, vertical: true)
                                 }
                             }

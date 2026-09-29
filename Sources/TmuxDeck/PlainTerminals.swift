@@ -49,9 +49,12 @@ final class PlainTerminal: NSObject, ObservableObject, Identifiable, LocalProces
         self.view = ClickableTerminalView(frame: NSRect(x: 0, y: 0, width: 800, height: 600))
         super.init()
         view.processDelegate = self
-        view.font = NSFont.monospacedSystemFont(ofSize: CGFloat(UserDefaults.standard.double(forKey: "fontSize").nonZero ?? 13), weight: .regular)
+        view.font = Zoom.shared.font.terminal
         view.optionAsMetaKey = true
         applyTerminalTheme(to: view)
+        NotificationCenter.default.addObserver(forName: .fontSizeChanged, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.view.font = Zoom.shared.font.terminal }
+        }
         NotificationCenter.default.addObserver(forName: .themeChanged, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { if let v = self?.view { applyTerminalTheme(to: v) } }
         }
@@ -62,6 +65,9 @@ final class PlainTerminal: NSObject, ObservableObject, Identifiable, LocalProces
         var env = ProcessInfo.processInfo.environment
         env["TERM"] = "xterm-256color"
         env["COLORTERM"] = "truecolor"
+        // Some TUIs pick a light or dark palette from COLORFGBG rather than probing with
+        // OSC 11; tell them which one this terminal is using.
+        env["COLORFGBG"] = Zoom.terminalIsDark ? "15;0" : "0;15"
         env["LANG"] = env["LANG"] ?? "en_US.UTF-8"
         let shell = env["SHELL"] ?? "/bin/zsh"
         // Coding CLIs run inside a login shell, so quitting one leaves a prompt behind.
