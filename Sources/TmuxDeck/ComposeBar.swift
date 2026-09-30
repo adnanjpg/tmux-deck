@@ -15,6 +15,9 @@ struct ComposeBar: View {
     @State private var focusToken = 0
     @State private var attachments: [Attachment] = []
     @State private var dropTargeted = false
+    @State private var caret = 0
+    @State private var chosen = 0
+    @State private var listDismissed = false
 
     /// A pasted or dropped image, uploaded to the work machine as soon as it's added.
     struct Attachment: Identifiable {
@@ -34,6 +37,9 @@ struct ComposeBar: View {
                 }
             }
             if !attachments.isEmpty { attachmentStrip }
+            if !completions.isEmpty {
+                CompletionList(items: completions, selected: chosen, onPick: accept)
+            }
             HStack(alignment: .bottom, spacing: 8) {
                 ZStack(alignment: .topLeading) {
                     if text.isEmpty {
@@ -59,7 +65,11 @@ struct ComposeBar: View {
                                     suggestion: suggestion,
                                     onSubmit: submit, onForward: forward,
                                     onAcceptSuggestion: { if let suggestion { text = suggestion } },
-                                    onImages: addImages)
+                                    onImages: addImages,
+                                    completing: !completions.isEmpty,
+                                    onCompletionMove: move,
+                                    onCompletionAccept: acceptChosen,
+                                    onCaretMoved: { caret = $0; listDismissed = false })
                         .frame(height: min(max(height, 22), 160))
                 }
                 .padding(.horizontal, 10)
@@ -99,10 +109,80 @@ struct ComposeBar: View {
             text = model.drafts[window.id] ?? ""
             focusToken += 1
         }
-        .onChange(of: text) { _, new in model.drafts[window.id] = new }
+        .onChange(of: text) { _, new in
+            model.drafts[window.id] = new
+            chosen = 0
+        }
+        .onAppear { catalog?.loadIfNeeded() }
+        .onChange(of: pathQuery) { _, q in if let q { files.search(q) } }
     }
 
     private var suggestion: String? { model.suggestions[window.id] }
+
+    // MARK: Completing a "/" command or a skill
+
+    private var catalog: CommandCatalog? {
+        guard let assistant = window.assistant else { return nil }
+        return CommandCatalogs.shared.catalog(host: model.host, assistant: assistant, folder: window.path)
+    }
+
+    /// "@" completes a path in the folder this window is working in, which is how both CLIs
+    /// expect a file to be mentioned.
+    private var files: FileFinder { FileFinders.shared.finder(host: model.host, folder: window.path) }
+
+    /// What to offer, given the text and where the caret is.
+    private var completions: [Completion] {
+        guard !listDismissed, let catalog else { return [] }
+        let caretIndex = text.index(text.startIndex, offsetBy: min(caret, text.count))
+        guard let context = CompletionContext.find(in: text, caret: caretIndex) else { return [] }
+        if context.prefix == "@" { return files.matches(context.query) }
+        guard context.prefix == "/" else { return [] }
+        let found = catalog.matches(context.query, kind: nil)
+        // Once what you've typed *is* the command, get out of the way: otherwise Enter would
+        // accept the completion instead of sending the message.
+        if found.count == 1, found[0].kind == .command, found[0].name == context.query { return [] }
+        return found
+    }
+
+    /// The "@…" being typed, if any — watched so the file search runs as you type.
+    private var pathQuery: String? {
+        let caretIndex = text.index(text.startIndex, offsetBy: min(caret, text.count))
+        guard let context = CompletionContext.find(in: text, caret: caretIndex),
+              context.prefix == "@" else { return nil }
+        return context.query
+    }
+
+    private func acceptChosen() {
+        let list = completions
+        guard !list.isEmpty else { return }
+        accept(list[min(chosen, list.count - 1)])
+    }
+
+    private func move(_ delta: Int) {
+        guard delta != 0 else { listDismissed = true; return }
+        let count = completions.count
+        guard count > 0 else { return }
+        chosen = (chosen + delta + count) % count
+    }
+
+    /// Puts the command or skill into the box. A skill isn't a command, so it goes in as a
+    /// sentence you can keep typing; a command replaces what you typed and is ready to send.
+    private func accept(_ item: Completion) {
+        let caretIndex = text.index(text.startIndex, offsetBy: min(caret, text.count))
+        guard let context = CompletionContext.find(in: text, caret: caretIndex) else { return }
+        let replacement: String
+        switch item.kind {
+        case .command: replacement = "/\(item.name) "
+        case .file: replacement = "@\(item.name) "
+        case .skill: replacement = "Use the \(item.name) skill to "
+        }
+        let offset = text.distance(from: text.startIndex, to: context.range.lowerBound)
+        text.replaceSubrange(context.range, with: replacement)
+        caret = offset + replacement.count
+        chosen = 0
+        listDismissed = true
+        focusToken += 1
+    }
 
     private var placeholder: String {
         guard let assistant = window.assistant else { return "Type a command — Enter to run" }
@@ -247,6 +327,11 @@ struct ComposeTextView: NSViewRepresentable {
     var onForward: ([String]) -> Void
     var onAcceptSuggestion: () -> Void
     var onImages: ([Data]) -> Void = { _ in }
+    /// True while the completion list is showing, so ↑↓ ⇥ ↩ Esc drive it instead of the pane.
+    var completing: Bool = false
+    var onCompletionMove: (Int) -> Void = { _ in }
+    var onCompletionAccept: () -> Void = {}
+    var onCaretMoved: (Int) -> Void = { _ in }
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
@@ -276,6 +361,9 @@ struct ComposeTextView: NSViewRepresentable {
         tv.onForward = { [weak coordinator] keys in coordinator?.parent.onForward(keys) }
         tv.onAcceptSuggestion = { [weak coordinator] in coordinator?.parent.onAcceptSuggestion() }
         tv.onImages = { [weak coordinator] images in coordinator?.parent.onImages(images) }
+        tv.onCompletionMove = { [weak coordinator] delta in coordinator?.parent.onCompletionMove(delta) }
+        tv.onCompletionAccept = { [weak coordinator] in coordinator?.parent.onCompletionAccept() }
+        tv.onCaretMoved = { [weak coordinator] caret in coordinator?.parent.onCaretMoved(caret) }
         scroll.documentView = tv
         return scroll
     }
@@ -284,6 +372,7 @@ struct ComposeTextView: NSViewRepresentable {
         context.coordinator.parent = self
         guard let tv = scroll.documentView as? ComposeNSTextView else { return }
         tv.hasSuggestion = suggestion != nil
+        tv.completing = completing
         if tv.string != text {
             tv.string = text
             context.coordinator.updateHeight(tv)
@@ -303,6 +392,7 @@ struct ComposeTextView: NSViewRepresentable {
             guard let tv = note.object as? NSTextView else { return }
             parent.text = tv.string
             updateHeight(tv)
+            parent.onCaretMoved(tv.selectedRange().location)
         }
 
         func updateHeight(_ tv: NSTextView) {
@@ -324,7 +414,11 @@ final class ComposeNSTextView: NSTextView {
     var onForward: (([String]) -> Void)?
     var onAcceptSuggestion: (() -> Void)?
     var onImages: (([Data]) -> Void)?
+    var onCompletionMove: ((Int) -> Void)?
+    var onCompletionAccept: (() -> Void)?
+    var onCaretMoved: ((Int) -> Void)?
     var hasSuggestion = false
+    var completing = false
 
     /// Image files, or raw image data when there's no text (a screenshot on the clipboard).
     static func images(from pb: NSPasteboard) -> [Data] {
@@ -360,6 +454,19 @@ final class ComposeNSTextView: NSTextView {
         if flags == .control, event.charactersIgnoringModifiers == "c" {
             onForward?(["C-c"]); return
         }
+        // While the completion list is open it owns the navigation keys.
+        if completing {
+            switch event.keyCode {
+            case 126: onCompletionMove?(-1); return           // Up
+            case 125: onCompletionMove?(1); return            // Down
+            case 48 where !flags.contains(.shift),            // Tab
+                 36, 76:                                      // Return
+                onCompletionAccept?(); return
+            case 53:                                          // Esc closes the list, not Claude
+                onCompletionMove?(0); return
+            default: break
+            }
+        }
         // Tab, Shift+Tab or → takes Claude's suggestion into the box, where you can edit it.
         if empty && hasSuggestion && (event.keyCode == 48 || (event.keyCode == 124 && flags.subtracting([.numericPad, .function]).isEmpty)) {
             onAcceptSuggestion?()
@@ -387,6 +494,13 @@ final class ComposeNSTextView: NSTextView {
             if let key = map[event.keyCode] { onForward?([key]); return }
         }
         super.keyDown(with: event)
+        reportCaret()
+    }
+
+    /// Where the caret is after a key, so the box can work out what's being completed.
+    func reportCaret() {
+        let caret = selectedRange().location
+        DispatchQueue.main.async { self.onCaretMoved?(caret) }
     }
 }
 
