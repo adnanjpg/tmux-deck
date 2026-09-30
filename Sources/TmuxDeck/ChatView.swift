@@ -910,45 +910,30 @@ struct MarkdownText: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            ForEach(Array(blocks.enumerated()), id: \.offset) { _, block in
-                switch block {
-                case .table(let header, let alignments, let rows):
-                    TableView(header: header, alignments: alignments, rows: rows)
-                case .text(let s):
-                    let prs = Self.prURLs(in: s)
-                    // A paragraph that is only PR links becomes chips; otherwise chips go under it.
-                    if prs.isEmpty || !Self.isOnlyLinks(s, prs) {
-                        Text(Self.inline(s))
-                            .lineSpacing(3)
-                            .textSelection(.enabled)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                    if !prs.isEmpty {
-                        VStack(alignment: .leading, spacing: 6) {
-                            ForEach(prs, id: \.self) { PRChip(url: $0) }
-                        }
-                    }
-                case .heading(let s, let level):
-                    Text(Self.inline(s))
-                        .font(level <= 2 ? fonts.title3 : fonts.headline)
-                        .textSelection(.enabled)
-                        .padding(.top, 4)
-                case .code(let s):
-                    ScrollView(.horizontal) {
-                        Text(SyntaxHighlighter.highlight(s, theme: theme))
-                            .font(fonts.mono)
-                            .textSelection(.enabled)
-                            .padding(12)
-                    }
-                    .background(theme.code, in: RoundedRectangle(cornerRadius: 8))
-                    .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(theme.line))
-                    .overlay(alignment: .topTrailing) { CopyButton(text: s).padding(6) }
-                    .contextMenu { CopyItems(text: s, what: "code block") }
+        VStack(alignment: .leading, spacing: 8) {
+            // The whole message is one text view, so a selection can run across paragraphs,
+            // code and tables — which is what selecting text is supposed to do.
+            MarkdownTextView(blocks: blocks, theme: theme, fonts: fonts)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            // PR links become chips underneath; they're buttons, so they can't live in the text.
+            if !pullRequests.isEmpty {
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(pullRequests, id: \.self) { PRChip(url: $0) }
                 }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// Every PR link in the message, in order, without repeats.
+    private var pullRequests: [String] {
+        var seen = Set<String>()
+        var found: [String] = []
+        for block in blocks {
+            guard case .text(let s) = block else { continue }
+            for url in Self.prURLs(in: s) where seen.insert(url).inserted { found.append(url) }
+        }
+        return found
     }
 
     /// Distinct GitHub PR links in a paragraph, in order.
