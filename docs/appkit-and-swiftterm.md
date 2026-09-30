@@ -112,6 +112,33 @@ re-read their colours on `.themeChanged`.
 The same background is what answers a program's `OSC 11` query, which is how Codex and friends pick
 a light or dark palette — one more reason it has to be right.
 
+## Selecting text in the chat
+
+A SwiftUI `Text` is **one selection unit**, and there is no selection that spans two views. So
+rendering a message as a `VStack` of `Text` per paragraph — which is what it was — means you can
+never drag across two paragraphs. That isn't a polish problem; it's the wrong shape, and copy
+buttons don't substitute for it.
+
+`MarkdownTextView` builds the whole message into one `NSAttributedString` and shows it in a single
+`NSTextView`. Selection then behaves the way macOS text is supposed to: across paragraphs, code and
+tables, ⌘A, ⌘C, double- and triple-click, shift-click to extend.
+
+Notes for anyone touching it:
+
+- **TextKit 1 on purpose.** `NSTextTable` renders the Markdown tables and needs the old layout
+  manager, so the view is built with an explicit `NSTextStorage` / `NSLayoutManager` /
+  `NSTextContainer` rather than letting `NSTextView` pick TextKit 2.
+- **Height comes from `sizeThatFits`**, measured with `layoutManager.usedRect(for:)` at the width
+  SwiftUI proposes. Get it wrong and messages clip or leave gaps.
+- `AttributedString(markdown:)` marks runs with *inline presentation intents*, not fonts, so bold,
+  italic and `code` have to be converted to real attributes by hand.
+- Code blocks and table cells are `NSTextBlock` / `NSTextTableBlock`, which is where the padding,
+  background and borders come from. Their dimensions are set per edge (`setWidth(_:type:for:edge:)`);
+  the edgeless overload doesn't exist for padding or margin.
+- ⌘C copies **plain text**: pasting a reply into a terminal or an issue shouldn't carry fonts.
+- Anything interactive — the PR chips — can't live inside the text, so it stays a SwiftUI view
+  underneath.
+
 ## Text size
 
 macOS SwiftUI **ignores `dynamicTypeSize`** — `.font(.body)` renders identically at `.xSmall` and
