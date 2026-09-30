@@ -15,12 +15,22 @@ Navigation: Back (the roots you've been at), Up one folder, the breadcrumb for a
 to <project>** — the panel keeps pointing at the folder of the window you're looking at, so
 wandering off to `~` or `/` is one click to undo.
 
-Expand all is **bounded on purpose**: four levels deep, at most 250 folders. A project with
-`node_modules` or a virtualenv has tens of thousands, and walking them over SSH would take minutes
-and be useless to read. It also lists **a whole level per round trip** — the helper's `list` takes
-many paths at once — which on a real repository is 4 calls and about 3 seconds, where one call per
-folder would have been 250 calls. The helper echoes back the path it was asked for, so `~` and
-`/home/you` don't become two cache entries.
+Expand all is **one command** (`tree` mode) and **bounded on purpose**: four levels deep, at most
+250 folders, and it says so when it stops. A project with `node_modules` or a virtualenv has tens of
+thousands, and walking them over SSH would take minutes and be useless to read. On UniRefund that's
+one round trip, under a second, 250 folders and 1458 rows. It follows `realpath` and refuses to
+visit the same folder twice, so a symlink or bind-mount loop terminates.
+
+Two things made an earlier level-at-a-time version lock the app up, and both are worth remembering:
+
+- Each level was a round trip **and** a publish, so the whole tree re-rendered after every one.
+- The flattened row list was a **computed property on the view**, so it was rebuilt on every body
+  evaluation — and a one-second timer in `FilePanelHost` guaranteed one. It's `FileTree.rows` now,
+  rebuilt from `didSet` only when the root, children, expansion, filter or hidden-files setting
+  actually change, and the timer is a bounded retry instead.
+
+The helper echoes back the path it was asked for, so `~` and `/home/you` don't become two cache
+entries.
 
 ### Saving, and not clobbering the agent
 

@@ -55,23 +55,61 @@ struct RemoteFile: Identifiable, Hashable {
 final class FileTree: ObservableObject {
     let remote: Remote
 
-    @Published private(set) var children: [String: [RemoteFile]] = [:]
+    @Published private(set) var children: [String: [RemoteFile]] = [:] { didSet { rebuildRows() } }
     @Published private(set) var loading: Set<String> = []
-    @Published private(set) var failed: [String: String] = [:]
-    @Published var expanded: Set<String> = []
-    @Published var root: String = "~"
-    @Published var showHidden = false
-    @Published var filter = ""
+    @Published private(set) var failed: [String: String] = [:] { didSet { rebuildRows() } }
+    @Published var expanded: Set<String> = [] { didSet { rebuildRows() } }
+    @Published var root: String = "~" { didSet { rebuildRows() } }
+    @Published var showHidden = false { didSet { rebuildRows() } }
+    @Published var filter = "" { didSet { rebuildRows() } }
     /// The folder the window this panel is following is working in. Wandering off to ~ or / is
     /// easy; this is what gets you back.
     @Published var projectRoot: String?
     @Published private(set) var expandingAll = false
+    /// True when Expand all hit its cap and there's more tree below.
+    @Published private(set) var truncated = false
 
     /// Roots you've been at, so Back works like a browser's.
     private var history: [String] = []
     var canGoBack: Bool { !history.isEmpty }
 
     init(remote: Remote) { self.remote = remote }
+
+    /// One row per visible line of the tree, rebuilt only when something it depends on changes.
+    /// It used to be a computed property on the view, so it was rebuilt on every frame — with a
+    /// few hundred folders open that is what locked the app up.
+    struct Row: Identifiable {
+        enum Kind {
+            case file(RemoteFile)
+            case loading
+            case message(String)
+        }
+        var id: String
+        var depth: Int
+        var kind: Kind
+    }
+
+    @Published private(set) var rows: [Row] = []
+
+    private func rebuildRows() {
+        var out: [Row] = []
+        func walk(_ folder: String, _ depth: Int) {
+            guard depth < 12, out.count < 5000 else { return }
+            for file in entries(folder) {
+                out.append(Row(id: file.path, depth: depth, kind: .file(file)))
+                guard file.isDirectory, expanded.contains(file.path) else { continue }
+                if let error = failed[file.path] {
+                    out.append(Row(id: file.path + "!", depth: depth + 1, kind: .message(error)))
+                } else if children[file.path] == nil {
+                    out.append(Row(id: file.path + "…", depth: depth + 1, kind: .loading))
+                } else {
+                    walk(file.path, depth + 1)
+                }
+            }
+        }
+        walk(root, 0)
+        rows = out
+    }
 
     func entries(_ path: String) -> [RemoteFile] {
         let all = children[path] ?? []
@@ -127,33 +165,38 @@ final class FileTree: ObservableObject {
         expanded = []
     }
 
-    /// Expands the tree, listing folders as it goes.
+    /// Expands the tree in **one** command on the server.
     ///
     /// Bounded on purpose: a project with `node_modules` or a virtualenv in it has tens of
-    /// thousands of folders, and walking all of them over SSH would take minutes and be useless
-    /// to look at. It goes four levels deep and stops after 250 folders, leaving the rest to be
-    /// opened by hand.
+    /// thousands of folders, so this goes four levels deep and stops after 250, leaving the rest
+    /// to be opened by hand. Doing it a level at a time meant a round trip per level and a
+    /// re-render of the whole tree after each one, which locked the app up on a real repository.
     func expandAll() async {
         guard !expandingAll else { return }
         expandingAll = true
         defer { expandingAll = false }
+        let result = await remote.run(
+            "python3 - tree \(sq(root)) 4 250 \(showHidden ? "1" : "0")",
+            input: Self.helper, timeout: 120)
+        guard result.ok, let data = result.stdout.data(using: .utf8),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let folders = obj["folders"] as? [[String: Any]] else { return }
         var opened: Set<String> = []
-        var level = [root]
-        for _ in 0..<4 {
-            await load(level)
-            var next: [String] = []
-            for folder in level {
-                for file in children[folder] ?? [] where file.isDirectory && !file.isLink {
-                    if !showHidden && file.isHidden { continue }
-                    guard opened.count < 250 else { break }
-                    opened.insert(file.path)
-                    next.append(file.path)
-                }
-            }
-            expanded = opened
-            if next.isEmpty || opened.count >= 250 { break }
-            level = next
+        var listings: [String: [RemoteFile]] = [:]
+        var problems: [String: String] = [:]
+        for folder in folders {
+            let asked = folder["asked"] as? String ?? folder["path"] as? String ?? ""
+            if let error = folder["error"] as? String { problems[asked] = error; continue }
+            let real = folder["path"] as? String ?? asked
+            let rows = Self.rows(folder["items"] as? [[String: Any]] ?? [], in: real)
+            listings[asked] = rows
+            if real != asked { listings[real] = rows }
+            if asked != root { opened.insert(asked) }
         }
+        // One publish for the lot, rather than one per level.
+        children.merge(listings) { _, new in new }
+        failed.merge(problems) { _, new in new }
+        truncated = obj["truncated"] as? Bool ?? false
         expanded = opened
     }
 
@@ -207,16 +250,13 @@ final class FileTree: ObservableObject {
         store(obj, asked: path)
     }
 
-    private func store(_ obj: [String: Any], asked path: String) {
-        let real = obj["path"] as? String ?? path
-        let raw = obj["items"] as? [[String: Any]] ?? []
+    static func rows(_ raw: [[String: Any]], in folder: String) -> [RemoteFile] {
         var items: [RemoteFile] = []
         items.reserveCapacity(raw.count)
         for item in raw {
             let name = item["n"] as? String ?? "?"
-            let full = (real as NSString).appendingPathComponent(name)
             items.append(RemoteFile(name: name,
-                                    path: full,
+                                    path: (folder as NSString).appendingPathComponent(name),
                                     isDirectory: item["d"] as? Bool ?? false,
                                     size: item["s"] as? Int ?? 0,
                                     modified: item["m"] as? Double ?? 0,
@@ -226,6 +266,12 @@ final class FileTree: ObservableObject {
             if a.isDirectory != b.isDirectory { return a.isDirectory }
             return a.name.localizedStandardCompare(b.name) == .orderedAscending
         }
+        return items
+    }
+
+    private func store(_ obj: [String: Any], asked path: String) {
+        let real = obj["path"] as? String ?? path
+        let items = Self.rows(obj["items"] as? [[String: Any]] ?? [], in: real)
         children[path] = items
         if real != path {
             children[real] = items
@@ -298,6 +344,34 @@ def listing(target, asked=None):
     except OSError as exc:
         return {"asked": asked, "path": target, "error": str(exc)}
     return {"asked": asked, "path": os.path.realpath(target), "items": items}
+
+if mode == "tree":
+    # One walk for "expand all". Doing it a level at a time meant a round trip per level and a
+    # re-render of the whole tree after each one; this returns the lot, capped, in one call.
+    depth_limit = int(sys.argv[3]) if len(sys.argv) > 3 else 4
+    limit = int(sys.argv[4]) if len(sys.argv) > 4 else 250
+    show_hidden = (sys.argv[5] if len(sys.argv) > 5 else "0") == "1"
+    start = os.path.expanduser(path)
+    folders, seen = [], set()
+    frontier = [(start, path, 0)]
+    while frontier and len(folders) < limit:
+        target, asked, depth = frontier.pop(0)
+        real = os.path.realpath(target)
+        if real in seen:
+            continue            # a symlinked or bind-mounted loop would otherwise never end
+        seen.add(real)
+        entry = listing(target, asked)
+        folders.append(entry)
+        if "error" in entry or depth >= depth_limit:
+            continue
+        for item in entry["items"]:
+            if not item["d"] or item["l"]:
+                continue
+            if not show_hidden and item["n"].startswith("."):
+                continue
+            child = os.path.join(entry["path"], item["n"])
+            frontier.append((child, child, depth + 1))
+    out(folders=folders, truncated=bool(frontier))
 
 if mode == "list":
     # Several folders in one go: expanding a tree over SSH one round trip per folder is

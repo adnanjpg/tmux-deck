@@ -293,7 +293,9 @@ struct TurnView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             if let user = turn.user, case .command(let cmd) = user.kind {
-                MessageCard(role: .you, collapsed: binding(user.id), summary: cmd, detail: "command") {
+                MessageCard(role: .you, collapsed: binding(user.id), summary: cmd, detail: "command",
+                            copyText: cmd + (user.result.map { "\n" + $0 } ?? ""),
+                            copyTurn: turn.asText(store.assistant), copyAll: copyAll) {
                     VStack(alignment: .leading, spacing: 8) {
                         Label(cmd, systemImage: cmd.hasPrefix("!") ? "terminal" : "command")
                             .font(fonts.monoBody)
@@ -313,7 +315,8 @@ struct TurnView: View {
             if let user = turn.user, case .user(let text) = user.kind {
                 MessageCard(role: .you, collapsed: binding(user.id),
                             summary: text.split(separator: "\n").first.map(String.init) ?? text,
-                            detail: (user.images ?? 0) > 0 ? "\(user.images!) image\(user.images! == 1 ? "" : "s")" : "") {
+                            detail: (user.images ?? 0) > 0 ? "\(user.images!) image\(user.images! == 1 ? "" : "s")" : "",
+                            copyText: text, copyTurn: turn.asText(store.assistant), copyAll: copyAll) {
                     VStack(alignment: .leading, spacing: 8) {
                         if let n = user.images, n > 0 { ImageBadge(count: n) }
                         if !text.isEmpty {
@@ -328,7 +331,9 @@ struct TurnView: View {
             if !turn.replies.isEmpty {
                 let summary = turn.replySummary
                 MessageCard(role: .assistant(store.assistant), collapsed: binding(turn.replyID),
-                            summary: summary.text, detail: summary.detail) {
+                            summary: summary.text, detail: summary.detail,
+                            copyText: turn.replyText(store.assistant),
+                            copyTurn: turn.asText(store.assistant), copyAll: copyAll) {
                     VStack(alignment: .leading, spacing: 12) {
                         ForEach(turn.replies) { ChatRow(item: $0) }
                     }
@@ -337,13 +342,10 @@ struct TurnView: View {
         }
         .padding(.vertical, 14)
         .overlay(alignment: .bottom) { Divider().opacity(0.6) }
-        .contextMenu {
-            Button("Copy this turn") { Clipboard.put(turn.asText(store.assistant)) }
-            Button("Copy the whole conversation") {
-                Clipboard.put(Turn.group(store.items).map { $0.asText(store.assistant) }
-                    .joined(separator: "\n\n---\n\n"))
-            }
-        }
+    }
+
+    private func copyAll() -> String {
+        Turn.group(store.items).map { $0.asText(store.assistant) }.joined(separator: "\n\n---\n\n")
     }
 
     private func binding(_ id: String) -> Binding<Bool> {
@@ -355,6 +357,7 @@ struct TurnView: View {
 struct MessageCard<Content: View>: View {
     @Environment(\.fonts) private var fonts
     @Environment(\.theme) private var theme
+    @State private var hovering = false
     enum Role: Equatable {
         case you
         case assistant(CodingAssistant)
@@ -372,6 +375,11 @@ struct MessageCard<Content: View>: View {
     @Binding var collapsed: Bool
     let summary: String
     let detail: String
+    /// What "Copy message" copies. A menu in the header rather than a context menu over the
+    /// body: a contextMenu on a container swallows the drag that starts a text selection.
+    var copyText: String?
+    var copyTurn: String?
+    var copyAll: (() -> String)?
     @ViewBuilder let content: Content
 
     var body: some View {
@@ -401,6 +409,9 @@ struct MessageCard<Content: View>: View {
             }
             .buttonStyle(.plain)
             .help(collapsed ? "Expand" : "Collapse")
+            .overlay(alignment: .trailing) {
+                copyMenu.offset(x: -18)
+            }
 
             if !collapsed {
                 content
@@ -414,6 +425,38 @@ struct MessageCard<Content: View>: View {
                 RoundedRectangle(cornerRadius: 12).fill(theme.tint.opacity(0.09))
                 RoundedRectangle(cornerRadius: 12).strokeBorder(theme.tint.opacity(0.18))
             }
+        }
+        .onHover { hovering = $0 }
+    }
+
+    /// Copy without selecting anything: the common case is wanting a whole message.
+    @ViewBuilder private var copyMenu: some View {
+        if copyText != nil || copyTurn != nil {
+            Menu {
+                if let copyText {
+                    Button("Copy message") { Clipboard.put(copyText) }
+                    Button("Copy as quote") {
+                        Clipboard.put(copyText.split(separator: "\n", omittingEmptySubsequences: false)
+                            .map { "> " + $0 }.joined(separator: "\n"))
+                    }
+                }
+                if let copyTurn {
+                    Divider()
+                    Button("Copy this turn") { Clipboard.put(copyTurn) }
+                }
+                if let copyAll {
+                    Button("Copy the whole conversation") { Clipboard.put(copyAll()) }
+                }
+            } label: {
+                Image(systemName: "doc.on.doc")
+                    .font(fonts.caption)
+                    .foregroundStyle(hovering ? Color.secondary : Color.clear)
+            }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .fixedSize()
+            .onHover { hovering = $0 }
+            .help("Copy")
         }
     }
 
@@ -901,7 +944,7 @@ struct MarkdownText: View {
                     .background(theme.code, in: RoundedRectangle(cornerRadius: 8))
                     .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(theme.line))
                     .overlay(alignment: .topTrailing) { CopyButton(text: s).padding(6) }
-                    .contextMenu { CopyItems(text: s, what: "code") }
+                    .contextMenu { CopyItems(text: s, what: "code block") }
                 }
             }
         }
@@ -953,6 +996,7 @@ struct CopyItems: View {
 struct CopyButton: View {
     let text: String
     @State private var copied = false
+    @State private var hovering = false
 
     var body: some View {
         Button {
@@ -970,11 +1014,21 @@ struct CopyButton: View {
         }
         .buttonStyle(.plain)
         .foregroundStyle(copied ? Color.green : Color.secondary)
+        .opacity(hovering || copied ? 1 : 0)
+        .onHover { hovering = $0 }
         .help(copied ? "Copied" : "Copy")
     }
 }
 
 extension Turn {
+    /// Only what the assistant said, without its tool calls — what you mean by "this message".
+    func replyText(_ assistant: CodingAssistant) -> String {
+        replies.compactMap { reply in
+            if case .assistant(let t) = reply.kind { return t }
+            return nil
+        }.joined(separator: "\n\n")
+    }
+
     /// The turn as plain text, for the clipboard.
     func asText(_ assistant: CodingAssistant) -> String {
         var out: [String] = []

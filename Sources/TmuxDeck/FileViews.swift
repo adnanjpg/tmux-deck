@@ -18,7 +18,7 @@ struct FilePanel: View {
             if let error = tree.failed[tree.root] {
                 unavailable(error)
             } else {
-                List(visible, id: \.id) { row in
+                List(tree.rows, id: \.id) { row in
                     switch row.kind {
                     case .file(let file):
                         FileRow(file: file, depth: row.depth, tree: tree)
@@ -74,6 +74,11 @@ struct FilePanel: View {
                     .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
             }
             breadcrumb
+            if tree.truncated {
+                Text("Showing the first 250 folders — open the rest as you need them.")
+                    .font(fonts.caption2).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             HStack(spacing: 6) {
                 TextField("Filter", text: $tree.filter)
                     .textFieldStyle(.roundedBorder)
@@ -136,38 +141,6 @@ struct FilePanel: View {
         }
     }
 
-    /// The open part of the tree, flattened. `OutlineGroup` wants the whole tree up front;
-    /// folders here are listed lazily, one at a time, as they're expanded.
-    private struct Row: Identifiable {
-        enum Kind {
-            case file(RemoteFile)
-            case loading
-            case message(String)
-        }
-        var id: String
-        var depth: Int
-        var kind: Kind
-    }
-
-    private var visible: [Row] {
-        var rows: [Row] = []
-        func walk(_ folder: String, _ depth: Int) {
-            guard depth < 12 else { return }
-            for file in tree.entries(folder) {
-                rows.append(Row(id: file.path, depth: depth, kind: .file(file)))
-                guard file.isDirectory, tree.expanded.contains(file.path) else { continue }
-                if let error = tree.failed[file.path] {
-                    rows.append(Row(id: file.path + "!", depth: depth + 1, kind: .message(error)))
-                } else if tree.children[file.path] == nil {
-                    rows.append(Row(id: file.path + "…", depth: depth + 1, kind: .loading))
-                } else {
-                    walk(file.path, depth + 1)
-                }
-            }
-        }
-        walk(tree.root, 0)
-        return rows
-    }
 }
 
 private struct FileRow: View {
@@ -488,8 +461,15 @@ struct FilePanelHost: View {
             .id(host)
             .onAppear { follow(tree) }
             .onChange(of: layout.focusedTag) { _, _ in follow(tree) }
-            .onReceive(Timer.publish(every: 1, on: .main, in: .common).autoconnect()) { _ in
-                follow(tree)
+            // The sidebar may not have resolved the window yet on the first appearance; try a
+            // few more times rather than polling forever, which rebuilt the panel every second.
+            .task(id: host) {
+                for _ in 0..<10 {
+                    try? await Task.sleep(for: .milliseconds(600))
+                    guard !Task.isCancelled else { return }
+                    follow(tree)
+                    if rooted.contains(host) { return }
+                }
             }
     }
 
