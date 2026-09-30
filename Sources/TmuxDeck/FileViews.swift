@@ -21,7 +21,15 @@ struct FilePanel: View {
                 List(tree.rows, id: \.id) { row in
                     switch row.kind {
                     case .file(let file):
-                        FileRow(file: file, depth: row.depth, tree: tree)
+                        FileRow(file: file, depth: row.depth,
+                                isExpanded: tree.expanded.contains(file.path),
+                                isLocal: tree.remote.isLocal, host: tree.remote.host,
+                                onOpen: { f in
+                                    if f.isDirectory { tree.toggle(f) }
+                                    else { LayoutModel.shared.show(FileTile.tag(host: tree.remote.host, path: f.path)) }
+                                },
+                                onSetRoot: { tree.setRoot($0.path) })
+                        .equatable()
                     case .loading:
                         HStack {
                             ProgressView().controlSize(.mini)
@@ -143,18 +151,31 @@ struct FilePanel: View {
 
 }
 
-private struct FileRow: View {
+/// One line of the tree.
+///
+/// It deliberately does **not** observe the `FileTree`. With a few hundred folders open there are
+/// well over a thousand of these on screen, and any published change — a folder finishing loading,
+/// the rows being rebuilt — would invalidate every one of them. It takes plain values and a couple
+/// of closures instead, so a row only re-renders when its own inputs change.
+private struct FileRow: View, Equatable {
     @Environment(\.fonts) private var fonts
-    @EnvironmentObject private var app: AppModel
     let file: RemoteFile
     let depth: Int
-    @ObservedObject var tree: FileTree
+    let isExpanded: Bool
+    let isLocal: Bool
+    let host: String
+    let onOpen: (RemoteFile) -> Void
+    let onSetRoot: (RemoteFile) -> Void
+
+    static func == (a: FileRow, b: FileRow) -> Bool {
+        a.file == b.file && a.depth == b.depth && a.isExpanded == b.isExpanded
+    }
 
     var body: some View {
         Button(action: open) {
             HStack(spacing: 5) {
                 if file.isDirectory {
-                    Image(systemName: tree.expanded.contains(file.path) ? "chevron.down" : "chevron.right")
+                    Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
                         .font(.system(size: 9, weight: .semibold))
                         .foregroundStyle(.tertiary)
                         .frame(width: 10)
@@ -179,7 +200,7 @@ private struct FileRow: View {
         .buttonStyle(.plain)
         .contextMenu {
             if file.isDirectory {
-                Button("Open as root") { tree.setRoot(file.path) }
+                Button("Open as root") { onSetRoot(file) }
             } else {
                 Button("Open") { open() }
                 Button("Open to the right") {
@@ -194,7 +215,7 @@ private struct FileRow: View {
                 NSPasteboard.general.clearContents()
                 NSPasteboard.general.setString(file.path, forType: .string)
             }
-            if tree.remote.isLocal {
+            if isLocal {
                 Button("Reveal in Finder") {
                     NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: file.path)])
                 }
@@ -202,15 +223,9 @@ private struct FileRow: View {
         }
     }
 
-    private var tag: String { FileTile.tag(host: tree.remote.host, path: file.path) }
+    private var tag: String { FileTile.tag(host: host, path: file.path) }
 
-    private func open() {
-        if file.isDirectory {
-            tree.toggle(file)
-        } else {
-            LayoutModel.shared.show(tag)
-        }
-    }
+    private func open() { onOpen(file) }
 }
 
 // MARK: The viewer / editor

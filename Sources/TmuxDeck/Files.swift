@@ -8,7 +8,7 @@ struct FileError: Error, Equatable {
 }
 
 /// One entry in a remote folder.
-struct RemoteFile: Identifiable, Hashable {
+struct RemoteFile: Identifiable, Hashable, Sendable {
     var name: String
     var path: String
     var isDirectory: Bool
@@ -91,7 +91,19 @@ final class FileTree: ObservableObject {
 
     @Published private(set) var rows: [Row] = []
 
+    /// Set while several properties are being changed together, so the rows are rebuilt once at
+    /// the end rather than once per property.
+    private var batching = false
+
+    private func batch(_ work: () -> Void) {
+        batching = true
+        work()
+        batching = false
+        rebuildRows()
+    }
+
     private func rebuildRows() {
+        guard !batching else { return }
         var out: [Row] = []
         func walk(_ folder: String, _ depth: Int) {
             guard depth < 12, out.count < 5000 else { return }
@@ -175,29 +187,49 @@ final class FileTree: ObservableObject {
         guard !expandingAll else { return }
         expandingAll = true
         defer { expandingAll = false }
+        let currentRoot = root
         let result = await remote.run(
-            "python3 - tree \(sq(root)) 4 250 \(showHidden ? "1" : "0")",
+            "python3 - tree \(sq(currentRoot)) 4 250 \(showHidden ? "1" : "0")",
             input: Self.helper, timeout: 120)
-        guard result.ok, let data = result.stdout.data(using: .utf8),
-              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let folders = obj["folders"] as? [[String: Any]] else { return }
-        var opened: Set<String> = []
-        var listings: [String: [RemoteFile]] = [:]
-        var problems: [String: String] = [:]
-        for folder in folders {
-            let asked = folder["asked"] as? String ?? folder["path"] as? String ?? ""
-            if let error = folder["error"] as? String { problems[asked] = error; continue }
-            let real = folder["path"] as? String ?? asked
-            let rows = Self.rows(folder["items"] as? [[String: Any]] ?? [], in: real)
-            listings[asked] = rows
-            if real != asked { listings[real] = rows }
-            if asked != root { opened.insert(asked) }
+        guard result.ok, let data = result.stdout.data(using: .utf8) else { return }
+        // Parsing 175 KB of JSON and building fifteen hundred rows is not main-thread work.
+        // Only the finished arrays come back to the main actor.
+        guard let parsed = await Self.parseTree(data, root: currentRoot) else { return }
+        guard currentRoot == root else { return }   // you moved on while it was running
+        batch {
+            children.merge(parsed.listings) { _, new in new }
+            failed.merge(parsed.problems) { _, new in new }
+            truncated = parsed.truncated
+            expanded = parsed.opened
         }
-        // One publish for the lot, rather than one per level.
-        children.merge(listings) { _, new in new }
-        failed.merge(problems) { _, new in new }
-        truncated = obj["truncated"] as? Bool ?? false
-        expanded = opened
+    }
+
+    private struct ParsedTree: Sendable {
+        var listings: [String: [RemoteFile]]
+        var problems: [String: String]
+        var opened: Set<String>
+        var truncated: Bool
+    }
+
+    nonisolated private static func parseTree(_ data: Data, root: String) async -> ParsedTree? {
+        await Task.detached(priority: .userInitiated) { () -> ParsedTree? in
+            guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let folders = obj["folders"] as? [[String: Any]] else { return nil }
+            var listings: [String: [RemoteFile]] = [:]
+            var problems: [String: String] = [:]
+            var opened: Set<String> = []
+            for folder in folders {
+                let asked = folder["asked"] as? String ?? folder["path"] as? String ?? ""
+                if let error = folder["error"] as? String { problems[asked] = error; continue }
+                let real = folder["path"] as? String ?? asked
+                let rows = Self.rows(folder["items"] as? [[String: Any]] ?? [], in: real)
+                listings[asked] = rows
+                if real != asked { listings[real] = rows }
+                if asked != root { opened.insert(asked) }
+            }
+            return ParsedTree(listings: listings, problems: problems, opened: opened,
+                              truncated: obj["truncated"] as? Bool ?? false)
+        }.value
     }
 
     func refresh() {
@@ -216,16 +248,10 @@ final class FileTree: ObservableObject {
         let args = wanted.map(sq).joined(separator: " ")
         let result = await remote.run("python3 - list \(args)", input: Self.helper, timeout: 60)
         guard result.ok, let data = result.stdout.data(using: .utf8),
-              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let folders = obj["folders"] as? [[String: Any]] else { return }
-        for folder in folders {
-            let asked = folder["asked"] as? String ?? folder["path"] as? String ?? ""
-            if let error = folder["error"] as? String {
-                failed[asked] = error
-                continue
-            }
-            failed[asked] = nil
-            store(folder, asked: asked)
+              let parsed = await Self.parseTree(data, root: root) else { return }
+        batch {
+            children.merge(parsed.listings) { _, new in new }
+            failed.merge(parsed.problems) { _, new in new }
         }
     }
 
@@ -250,7 +276,7 @@ final class FileTree: ObservableObject {
         store(obj, asked: path)
     }
 
-    static func rows(_ raw: [[String: Any]], in folder: String) -> [RemoteFile] {
+    nonisolated static func rows(_ raw: [[String: Any]], in folder: String) -> [RemoteFile] {
         var items: [RemoteFile] = []
         items.reserveCapacity(raw.count)
         for item in raw {
