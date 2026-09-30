@@ -616,7 +616,8 @@ for pane, pid, path in panes:
         for w in allItems where w.state.isClaude {
             let raw = captures[w.paneID] ?? []
             if let activity = Self.activity(raw) { newActivities[w.id] = activity }
-            if let lines = Self.footer(raw) { newStatusLines[w.id] = lines }
+            let footer = w.assistant == .codex ? Self.codexFooter(raw) : Self.footer(raw)
+            if let footer { newStatusLines[w.id] = footer }
             if w.state == .claudeNeedsYou {
                 let plainTail = raw.suffix(45).map(stripANSI)
                 options[w.id] = Self.promptOptions(plainTail)
@@ -756,6 +757,18 @@ for pane, pid, path in panes:
     }
 
     /// The lines below Claude's input box: its status line, mode line and hints.
+    /// Codex's status line. It doesn't draw Claude's `───` rules around its input box, so the
+    /// footer can't be found the same way: it's the last line under the `›` prompt, and it's the
+    /// one carrying `·`-separated fields.
+    static func codexFooter(_ rawLines: [String]) -> [String]? {
+        let lines = rawLines.map(stripANSI)
+            .map { $0.replacingOccurrences(of: "\u{00a0}", with: " ") }
+            .filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
+        guard let line = lines.last(where: { $0.contains("·") && $0.contains("%") })
+                ?? lines.last(where: { $0.contains("·") }) else { return nil }
+        return [line]
+    }
+
     static func footer(_ rawLines: [String]) -> [String]? {
         let lines = rawLines.map(stripANSI).filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
         let rules = lines.indices.filter { lines[$0].trimmingCharacters(in: .whitespaces).hasPrefix("───") }

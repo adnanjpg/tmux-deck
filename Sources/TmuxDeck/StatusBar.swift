@@ -83,6 +83,88 @@ struct StatusChip: Identifiable, Hashable {
         return chips
     }
 
+    /// Codex's own footer, which reads
+    /// `gpt-6-astra low · ~/proj · gpt-6-astra · proj · Context 55% left · 5h 84% left · weekly 66% left · 4.1K in · 12K out`.
+    ///
+    /// Note it counts **down** — "55% left" — where Claude's counts up, so the percentages are
+    /// flipped to mean the same thing as everywhere else in the bar. The line is cut off at the
+    /// pane's width, so the last chips are often missing; that's the terminal's doing, not ours.
+    static func parseCodex(_ lines: [String]) -> [StatusChip] {
+        var chips: [StatusChip] = []
+        for line in lines {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            guard trimmed.contains("·"), trimmed.contains("%") || trimmed.contains("/") else { continue }
+            // Codex repeats the folder — once as a path and once as a bare name — so the
+            // paths are read first and the bare repeat is dropped rather than guessed at.
+            let segments = trimmed.components(separatedBy: "·")
+                .map { $0.trimmingCharacters(in: .whitespaces) }
+                .filter { !$0.isEmpty && !$0.hasSuffix("…") }
+            var folders = Set<String>()
+            var components = Set<String>()
+            for segment in segments where segment.hasPrefix("~/") || segment.hasPrefix("/") {
+                folders.insert((segment as NSString).lastPathComponent)
+                components.formUnion(segment.split(separator: "/").map(String.init))
+                if let r = segment.range(of: "/worktrees/") {
+                    folders.insert(String(segment[r.upperBound...]))
+                }
+            }
+            for segment in segments {
+                if folders.contains(segment) && !segment.contains("/") { continue }
+                // In a worktree, Codex also names the repository the worktree belongs to.
+                if components.contains(segment) && !segment.contains("/") {
+                    chips.append(StatusChip(kind: .location, text: segment, detail: "repo"))
+                    continue
+                }
+                chips += codexSegment(segment)
+            }
+        }
+        var seen = Set<String>()
+        return chips.filter { seen.insert($0.id).inserted }
+    }
+
+    private static func codexSegment(_ segment: String) -> [StatusChip] {
+        func g(_ m: Regex<AnyRegexOutput>.Match, _ i: Int) -> String? { m[i].substring.map(String.init) }
+
+        // "Context 55% left" and "5h 84% left" / "weekly 66% left" — a window and what's left.
+        if let re = try? Regex(#"^(Context|[0-9]+[hdw]|weekly|daily|monthly)\s+(\d+(?:\.\d+)?)%\s*left$"#),
+           let m = segment.firstMatch(of: re), let name = g(m, 1),
+           let left = g(m, 2).flatMap(Double.init) {
+            let used = max(0, min(100, 100 - left))
+            return name == "Context"
+                ? [StatusChip(kind: .context, text: "Context", percent: used)]
+                : [StatusChip(kind: .usage, text: name, percent: used)]
+        }
+        // "643K in" / "7.82K out"
+        if let re = try? Regex(#"^([\d.]+[KMG]?)\s+(in|out)$"#), let m = segment.firstMatch(of: re),
+           let amount = g(m, 1), let direction = g(m, 2) {
+            return [StatusChip(kind: .activity, text: "\(amount) \(direction)")]
+        }
+        // A path, or the folder name on its own.
+        if segment.hasPrefix("~/") || segment.hasPrefix("/") {
+            let name = (segment as NSString).lastPathComponent
+            if let r = segment.range(of: "/worktrees/") {
+                return [StatusChip(kind: .location, text: String(segment[r.upperBound...]), detail: "worktree")]
+            }
+            return [StatusChip(kind: .location, text: name.isEmpty ? segment : name)]
+        }
+        // "gpt-6-astra low" — the model, and its reasoning effort after it.
+        let words = segment.split(separator: " ").map(String.init)
+        let efforts = ["minimal", "low", "medium", "high", "xhigh", "max"]
+        if words.count == 2, efforts.contains(words[1].lowercased()) {
+            return [StatusChip(kind: .model, text: words[0]),
+                    StatusChip(kind: .effort, text: words[1].lowercased())]
+        }
+        if words.count == 1, efforts.contains(words[0].lowercased()) {
+            return [StatusChip(kind: .effort, text: words[0].lowercased())]
+        }
+        // A model id, not just anything with a hyphen in it: a folder name has hyphens too.
+        if words.count == 1, let re = try? Regex(#"^(gpt|o\d|claude|codex|grok|gemini|llama|qwen|deepseek)[\w.-]*$"#),
+           segment.lowercased().firstMatch(of: re) != nil {
+            return [StatusChip(kind: .model, text: segment)]
+        }
+        return [StatusChip(kind: .other, text: segment)]
+    }
+
     private static func parseModeLine(_ line: String) -> [StatusChip] {
         var parts = line.components(separatedBy: " · ").map { $0.trimmingCharacters(in: .whitespaces) }
         var chips: [StatusChip] = []
@@ -112,7 +194,9 @@ struct StatusBar: View {
     @State private var editing = false
 
     var body: some View {
-        let chips = StatusChip.parse(model.statusLines[window.id] ?? []).filter(isShown)
+        let lines = model.statusLines[window.id] ?? []
+        let chips = (window.assistant == .codex ? StatusChip.parseCodex(lines) : StatusChip.parse(lines))
+            .filter(isShown)
         HStack(spacing: 6) {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 6) {
@@ -154,7 +238,32 @@ private struct ChipView: View {
     @State private var open = false
 
     var body: some View {
+        let codex = window.assistant == .codex
         switch chip.kind {
+        case .model where codex:
+            // Codex picks the model and its effort together, in its own picker.
+            capsule { Label(chip.text, systemImage: "cpu").foregroundStyle(.secondary) }
+                .onTapGesture { model.send(text: "/model", to: window) }
+                .help("Change Codex's model (/model)")
+        case .effort where codex:
+            capsule { Label(chip.text, systemImage: "gauge.medium").foregroundStyle(.secondary) }
+                .onTapGesture { model.send(text: "/model", to: window) }
+                .help("Codex sets effort with the model (/model)")
+        case .context where codex, .usage where codex:
+            capsule {
+                HStack(spacing: 5) {
+                    Text(chip.kind == .context ? "Context" : "\(chip.text) usage").foregroundStyle(.secondary)
+                    Gauge(value: min((chip.percent ?? 0) / 100, 1)) { EmptyView() }
+                        .gaugeStyle(.accessoryLinearCapacity)
+                        .tint(color(chip.percent))
+                        .frame(width: 46)
+                        .scaleEffect(y: 0.8)
+                    Text("\(Int(chip.percent ?? 0))%").monospacedDigit()
+                }
+            }
+            .help(chip.kind == .context
+                  ? "\(100 - Int(chip.percent ?? 0))% of the context window is left"
+                  : "\(100 - Int(chip.percent ?? 0))% of your \(chip.text) limit is left")
         case .mode:
             Menu {
                 ForEach(ClaudeMode.allCases, id: \.self) { mode in

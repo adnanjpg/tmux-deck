@@ -64,6 +64,31 @@ The reader emits the **same records as the Claude reader** (`k: user|text|thinki
 so `ChatStore`, `ChatView`, the compose box, the disk cache and pending-message confirmation all work
 unchanged.
 
+## The status bar
+
+Codex writes its own status line under the composer:
+
+```
+gpt-6-astra low · ~/edefter-ai · gpt-6-astra · edefter-ai · Context 55% left · 5h 84% left · weekly 66% left · 4.1K in · 12K out
+```
+
+`StatusChip.parseCodex` turns it into the same chips Claude's line produces. Three things it has
+to know:
+
+- It **counts down** — "55% left" — where Claude's counts up, so the percentages are flipped to
+  mean the same thing as the rest of the bar.
+- It **repeats the folder**, once as a path and once as a bare name, and in a worktree the bare
+  name is the *repository*. The paths are read first so the repeat can be dropped or labelled
+  rather than guessed at — a bare `edefter-ai` otherwise looks exactly like a model id.
+- The line is **cut off at the pane's width**, so the last chips (the token counts) are often
+  missing. That's the terminal, not the parser.
+
+`TmuxModel.codexFooter` finds the line: Codex doesn't draw Claude's `───` rules around its input
+box, so the Claude footer logic finds nothing.
+
+The chips act with Codex's own commands — the model and effort chips both send `/model`, since
+Codex sets effort in the model picker — never Claude's `/effort` or Shift+Tab mode cycling.
+
 ## Sending, state and colour
 
 - Sending waits for Codex's `›` prompt marker, where Claude's is `❯` — same retry loop otherwise
