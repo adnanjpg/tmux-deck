@@ -8,9 +8,19 @@ struct TerminalPane: View {
     let window: TmuxWindow
     @State private var alive = true
     @State private var reconnecting = false
+    @State private var searching = false
 
     var body: some View {
-        terminal
+        VStack(spacing: 0) {
+            if searching {
+                TerminalSearchBar(terminal: controller.view) { searching = false }
+            }
+            terminal
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .findInTerminal)) { _ in
+            // Only the terminal you're actually in.
+            if controller.view.window?.firstResponder === controller.view { searching = true }
+        }
     }
 
     private var terminal: some View {

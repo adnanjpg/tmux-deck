@@ -66,7 +66,7 @@ To update, `git pull` and run `./build-app.sh` again.
 | Files | ⇧⌘E |
 | Changes against the base branch | ⇧⌘G |
 | Past conversations | ⇧⌘O |
-| Find in this conversation | ⌘F |
+| Find (chat, terminal or console) | ⌘F |
 | Keyboard shortcuts | ⌘/ |
 | Split right / down | ⌘D / ⇧⌘D |
 | Copy the whole window | ⇧⌘C |

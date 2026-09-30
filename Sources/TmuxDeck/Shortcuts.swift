@@ -34,7 +34,8 @@ struct ShortcutsView: View {
             ("Changes against the base branch", "⇧⌘G"),
             ("Past conversations", "⇧⌘O"),
             ("Pull requests", "⇧⌘P"),
-            ("Find in this conversation", "⌘F"),
+            ("Find — in the chat, a terminal or the console", "⌘F"),
+            ("Next / previous match in a terminal", "⌘G  ⇧⌘G"),
         ]),
         Group(title: "Reading", items: [
             ("Bigger / smaller / normal text", "⌘+  ⌘−  ⌘0"),

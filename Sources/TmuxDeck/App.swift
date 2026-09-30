@@ -1,4 +1,5 @@
 import AppKit
+import SwiftTerm
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -43,7 +44,7 @@ struct TmuxDeckApp: App {
                     .keyboardShortcut("w", modifiers: [.command])
             }
             CommandGroup(after: .sidebar) {
-                Button("Find…") { NotificationCenter.default.post(name: .findInChat, object: nil) }
+                Button("Find…") { AppDelegate.find() }
                     .keyboardShortcut("f", modifiers: [.command])
                 Divider()
                 Button("Files") { UserDefaults.standard.set(!UserDefaults.standard.bool(forKey: "showFiles"), forKey: "showFiles") }
@@ -173,6 +174,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
+
+    /// ⌘F means "find in what I'm looking at". Taking the shortcut for the chat broke it for the
+    /// console and the file editor, which have AppKit find bars of their own — so a text view
+    /// that offers one gets it, and everything else opens the chat's search.
+    static func find() {
+        let responder = NSApp.keyWindow?.firstResponder
+        // A console or the file editor has an AppKit find bar of its own.
+        if let text = responder as? NSTextView, text.usesFindBar {
+            text.performTextFinderAction(NSMenuItem(title: "Find", action: nil, keyEquivalent: "")
+                .withTag(NSTextFinder.Action.showFindInterface.rawValue))
+            return
+        }
+        // A terminal searches its own buffer, scrollback and all.
+        if let view = responder as? NSView, terminal(in: view) != nil {
+            NotificationCenter.default.post(name: .findInTerminal, object: nil)
+            return
+        }
+        NotificationCenter.default.post(name: .findInChat, object: nil)
+    }
+
+    /// The SwiftTerm view a responder belongs to, if any — focus can land on a subview.
+    private static func terminal(in view: NSView) -> NSView? {
+        var current: NSView? = view
+        while let v = current {
+            if v is SwiftTerm.TerminalView { return v }
+            current = v.superview
+        }
+        return nil
+    }
 }
 
 struct SettingsView: View {
@@ -321,5 +351,13 @@ private struct Swatch: View {
         }
         .frame(width: 44, height: 26)
         .task { theme = ThemeManager.load(ref) }
+    }
+}
+
+extension NSMenuItem {
+    /// `performTextFinderAction(_:)` reads the sender's tag to know which action to run.
+    func withTag(_ tag: Int) -> NSMenuItem {
+        self.tag = tag
+        return self
     }
 }

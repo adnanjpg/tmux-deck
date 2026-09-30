@@ -15,6 +15,9 @@ struct ChatView: View {
     @State private var visibleTurns = 25
     /// Whether the bottom of the chat is on screen, so new messages keep it pinned there.
     @State private var atBottom = true
+    /// ⌘F has to put the caret in the search field, or your typing goes on landing in the
+    /// message box and it looks as though nothing happened.
+    @FocusState private var searchFocused: Bool
 
     var body: some View {
         VStack(spacing: 0) {
@@ -133,6 +136,8 @@ struct ChatView: View {
         .background(theme.bg)
         .onReceive(NotificationCenter.default.publisher(for: .findInChat)) { _ in
             withAnimation(.snappy) { store.searching = true }
+            // A beat, so the field exists before the focus lands on it.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { searchFocused = true }
         }
         .task(id: store.sessionID) {
             await store.catchUp()
@@ -165,6 +170,7 @@ extension ChatView {
             TextField("Find in this conversation", text: $store.search)
                 .textFieldStyle(.plain)
                 .font(fonts.callout)
+                .focused($searchFocused)
                 .onSubmit { }
             if !store.search.trimmingCharacters(in: .whitespaces).isEmpty {
                 Text("\(turns.count) \(turns.count == 1 ? "turn" : "turns")")
@@ -178,6 +184,10 @@ extension ChatView {
             }
             .buttonStyle(.plain)
             .keyboardShortcut(.cancelAction)
+        }
+        .onExitCommand {
+            withAnimation(.snappy) { store.searching = false }
+            store.search = ""
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 7)
@@ -201,7 +211,11 @@ extension ChatView {
             Spacer()
             Button {
                 withAnimation(.snappy) { store.searching.toggle() }
-                if !store.searching { store.search = "" }
+                if store.searching {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { searchFocused = true }
+                } else {
+                    store.search = ""
+                }
             } label: {
                 Label("Find", systemImage: "magnifyingglass")
             }

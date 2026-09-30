@@ -364,13 +364,22 @@ final class PlainTerminalStore: ObservableObject {
 struct PlainTerminalView: View {
     @ObservedObject var terminal: PlainTerminal
     @ObservedObject private var store = PlainTerminalStore.shared
+    @State private var searching = false
 
     var body: some View {
         if terminal.assistant != nil, let chat = terminal.store,
            !store.rawTerminals.contains(terminal.id) {
             PlainChatView(terminal: terminal, store: chat)
         } else {
-            rawTerminal
+            VStack(spacing: 0) {
+                if searching {
+                    TerminalSearchBar(terminal: terminal.view) { searching = false }
+                }
+                rawTerminal
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .findInTerminal)) { _ in
+                if terminal.view.window?.firstResponder === terminal.view { searching = true }
+            }
         }
     }
 
