@@ -38,20 +38,22 @@ struct MarkdownTextView: NSViewRepresentable {
         view.textContainerInset = .zero
         view.delegate = context.coordinator
         view.linkTextAttributes = [:]
-        apply(to: view)
+        apply(to: view, coordinator: context.coordinator)
         return view
     }
 
     func updateNSView(_ view: SelectableTextView, context: Context) {
-        apply(to: view)
+        apply(to: view, coordinator: context.coordinator)
     }
 
     /// SwiftUI asks how tall this is for the width it has; measuring the laid-out text is the
     /// only way to answer, and getting it wrong shows up as a clipped or over-tall message.
     func sizeThatFits(_ proposal: ProposedViewSize, nsView: SelectableTextView, context: Context) -> CGSize? {
-        let width = proposal.width ?? nsView.bounds.width
+        var width = proposal.width ?? nsView.bounds.width
+        if width <= 0 || !width.isFinite { width = nsView.lastWidth }
         guard width > 0, width.isFinite,
               let container = nsView.textContainer, let layout = nsView.layoutManager else { return nil }
+        nsView.lastWidth = width
         if abs(container.size.width - width) > 0.5 {
             container.size = NSSize(width: width, height: CGFloat.greatestFiniteMagnitude)
         }
@@ -60,19 +62,37 @@ struct MarkdownTextView: NSViewRepresentable {
         return CGSize(width: width, height: ceil(height))
     }
 
-    private func apply(to view: SelectableTextView) {
-        let built = MarkdownAttributed.build(blocks, theme: theme, fonts: fonts)
-        if view.textStorage?.isEqual(to: built) != true {
+    /// Rebuilds the text only when something it depends on actually changed.
+    ///
+    /// Comparing the built strings doesn't work: every build makes fresh `NSTextBlock` objects,
+    /// so `isEqual` is always false, and re-setting the storage on every SwiftUI update
+    /// invalidates layout, which makes SwiftUI measure again — a message that never settles and
+    /// draws as nothing.
+    private func apply(to view: SelectableTextView, coordinator: Coordinator) {
+        let key = Key(blocks: blocks, theme: theme.name, isDark: theme.isDark, size: fonts.base)
+        if coordinator.key != key {
+            coordinator.key = key
+            let built = MarkdownAttributed.build(blocks, theme: theme, fonts: fonts)
             view.textStorage?.setAttributedString(built)
+            view.plainText = built.string
+            view.invalidateIntrinsicContentSize()
         }
         view.selectedTextAttributes = [
             .backgroundColor: theme.terminalSelection ?? .selectedTextBackgroundColor,
         ]
-        view.plainText = built.string
+    }
+
+    struct Key: Equatable {
+        var blocks: [MarkdownText.Block]
+        var theme: String
+        var isDark: Bool?
+        var size: CGFloat
     }
 
     @MainActor
     final class Coordinator: NSObject, NSTextViewDelegate {
+        var key: Key?
+
         func textView(_ view: NSTextView, clickedOnLink link: Any, at index: Int) -> Bool {
             guard let url = link as? URL ?? (link as? String).flatMap(URL.init(string:)) else { return false }
             NSWorkspace.shared.open(url)
@@ -84,6 +104,8 @@ struct MarkdownTextView: NSViewRepresentable {
 /// The text view itself: first-mouse so one click selects, and a copy that yields plain text.
 final class SelectableTextView: NSTextView {
     var plainText = ""
+    /// The last width it was measured at, so a measurement with no proposal still has one.
+    var lastWidth: CGFloat = 600
 
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 

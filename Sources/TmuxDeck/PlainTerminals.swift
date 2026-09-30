@@ -26,6 +26,12 @@ final class PlainTerminal: NSObject, ObservableObject, Identifiable, LocalProces
 
     let id: String
     let kind: Kind
+    /// Which machine it's on. `Remote.localHost` is this Mac; anything else is an SSH session
+    /// with no tmux behind it — so it ends when the app quits or the link drops, unlike a tmux
+    /// window. That's the trade you make for not wanting tmux.
+    let host: String
+    var remote: Remote { Remote(host: host) }
+    var isLocal: Bool { host == Remote.localHost }
     /// The conversation running in here, when there is one.
     @Published private(set) var claudeSessionID: String?
     @Published private(set) var codex: CodexSessionInfo?
@@ -38,11 +44,10 @@ final class PlainTerminal: NSObject, ObservableObject, Identifiable, LocalProces
     /// The chat store for whatever is running here, if its transcript has been found.
     var store: ChatStore? {
         if let id = claudeSessionID {
-            return PastStores.shared.store(host: Remote.localHost, assistant: .claude,
-                                           sessionID: id, path: "")
+            return PastStores.shared.store(host: host, assistant: .claude, sessionID: id, path: "")
         }
         if let codex {
-            return PastStores.shared.store(host: Remote.localHost, assistant: .codex,
+            return PastStores.shared.store(host: host, assistant: .codex,
                                            sessionID: codex.sessionID, path: codex.path)
         }
         return nil
@@ -62,11 +67,13 @@ final class PlainTerminal: NSObject, ObservableObject, Identifiable, LocalProces
         return (folder as NSString).lastPathComponent.isEmpty ? "Terminal" : (folder as NSString).lastPathComponent
     }
 
-    init(id: String = UUID().uuidString, kind: Kind, folder: String, name: String? = nil) {
+    init(id: String = UUID().uuidString, kind: Kind, folder: String, name: String? = nil,
+         host: String = Remote.localHost) {
         self.id = id
         self.kind = kind
         self.folder = folder
         self.name = name
+        self.host = host
         self.view = ClickableTerminalView(frame: NSRect(x: 0, y: 0, width: 800, height: 600))
         super.init()
         view.processDelegate = self
@@ -90,12 +97,23 @@ final class PlainTerminal: NSObject, ObservableObject, Identifiable, LocalProces
         // OSC 11; tell them which one this terminal is using.
         env["COLORFGBG"] = Zoom.terminalIsDark ? "15;0" : "0;15"
         env["LANG"] = env["LANG"] ?? "en_US.UTF-8"
-        let shell = env["SHELL"] ?? "/bin/zsh"
-        // Coding CLIs run inside a login shell, so quitting one leaves a prompt behind.
-        let args = kind.assistant.map { ["-lc", "\($0.command); exec \(shell) -l"] } ?? ["-l"]
         running = true
-        view.startProcess(executable: shell, args: args, environment: env.map { "\($0.key)=\($0.value)" },
-                          execName: nil, currentDirectory: FileManager.default.fileExists(atPath: folder) ? folder : NSHomeDirectory())
+        let environment = env.map { "\($0.key)=\($0.value)" }
+        if isLocal {
+            let shell = env["SHELL"] ?? "/bin/zsh"
+            // Coding CLIs run inside a login shell, so quitting one leaves a prompt behind.
+            let args = kind.assistant.map { ["-lc", "\($0.command); exec \(shell) -l"] } ?? ["-l"]
+            view.startProcess(executable: shell, args: args, environment: environment, execName: nil,
+                              currentDirectory: FileManager.default.fileExists(atPath: folder)
+                                  ? folder : NSHomeDirectory())
+        } else {
+            // A login shell on the server, in the folder, with no tmux in between.
+            let cd = folder.isEmpty ? "" : "cd \(sq(folder)) 2>/dev/null; "
+            let launch = kind.assistant.map { "\($0.command); " } ?? ""
+            let command = remote.interactiveCommand(cd + launch + "exec \"$SHELL\" -l")
+            view.startProcess(executable: command.executable, args: command.args,
+                              environment: environment, execName: nil)
+        }
         pollTask?.cancel()
         pollTask = Task { [weak self] in
             while !Task.isCancelled {
@@ -138,8 +156,10 @@ final class PlainTerminal: NSObject, ObservableObject, Identifiable, LocalProces
     /// tmux pane id to match on. Claude names its pid in ~/.claude/sessions; Codex is matched by
     /// folder and recency, exactly as the tmux side does.
     private func refreshInfo() async {
-        guard running, let pid = view.process?.shellPid, pid > 0 else { return }
-        let result = await Remote(host: Remote.localHost).run("""
+        guard running else { return }
+        guard isLocal else { await refreshRemoteInfo(); return }
+        guard let pid = view.process?.shellPid, pid > 0 else { return }
+        let result = await remote.run("""
         lsof -a -d cwd -p \(pid) -Fn 2>/dev/null | sed -n 's/^n//p' | head -1
         c=$(pgrep -P \(pid) -x claude | head -1); [ -z "$c" ] && c=$(pgrep -P \(pid) claude | head -1)
         if [ -n "$c" ] && [ -f ~/.claude/sessions/$c.json ]; then
@@ -171,8 +191,29 @@ final class PlainTerminal: NSObject, ObservableObject, Identifiable, LocalProces
         refreshState()
     }
 
+    /// On a server there's no local pid to walk, so the assistant is matched by the folder the
+    /// terminal was opened in — the same way a tmux pane is, minus the pane id.
+    private func refreshRemoteInfo() async {
+        guard let assistant else { refreshState(); return }
+        let script = assistant == .codex
+            ? "printf '%s %s %s\\n' plain $$ \(sq(folder)) | python3 -"
+            : ""
+        if assistant == .codex {
+            let result = await remote.run(script, input: TmuxModel.codexFinderScript)
+            for line in result.stdout.split(separator: "\n") where line.hasPrefix("@@CODEX ") {
+                let f = line.dropFirst(8).split(separator: " ", maxSplits: 2).map(String.init)
+                guard f.count == 3 else { continue }
+                let tab = f[2].split(separator: "\t", maxSplits: 1).map(String.init)
+                let info = CodexSessionInfo(sessionID: f[1], path: tab[0],
+                                            title: tab.count > 1 ? tab[1] : nil)
+                if info != codex { codex = info }
+            }
+        }
+        refreshState()
+    }
+
     private func refreshCodex(pid: Int32) async {
-        let result = await Remote(host: Remote.localHost).run(
+        let result = await remote.run(
             "printf '%%s %%s %%s\\n' plain \(pid) \(sq(folder)) | python3 -",
             input: TmuxModel.codexFinderScript)
         for line in result.stdout.split(separator: "\n") where line.hasPrefix("@@CODEX ") {
@@ -259,28 +300,43 @@ final class PlainTerminalStore: ObservableObject {
         var kind: PlainTerminal.Kind
         var folder: String
         var name: String?
+        /// Absent in terminals saved before servers were supported: those were all local.
+        var host: String?
     }
 
     private init() {
         enabled = UserDefaults.standard.bool(forKey: "plain.enabled")
         if let data = UserDefaults.standard.data(forKey: "plain.terminals"),
            let saved = try? JSONDecoder().decode([Saved].self, from: data) {
-            terminals = saved.map { PlainTerminal(id: $0.id, kind: $0.kind, folder: $0.folder, name: $0.name) }
+            terminals = saved.map {
+                PlainTerminal(id: $0.id, kind: $0.kind, folder: $0.folder, name: $0.name,
+                              host: $0.host ?? Remote.localHost)
+            }
         }
     }
 
     func save() {
-        let saved = terminals.map { Saved(id: $0.id, kind: $0.kind, folder: $0.folder, name: $0.name) }
+        let saved = terminals.map {
+            Saved(id: $0.id, kind: $0.kind, folder: $0.folder, name: $0.name, host: $0.host)
+        }
         if let data = try? JSONEncoder().encode(saved) { UserDefaults.standard.set(data, forKey: "plain.terminals") }
     }
 
     @discardableResult
-    func new(_ kind: PlainTerminal.Kind, in folder: String? = nil) -> PlainTerminal {
+    func new(_ kind: PlainTerminal.Kind, in folder: String? = nil,
+             host: String = Remote.localHost) -> PlainTerminal {
         enabled = true
-        let t = PlainTerminal(kind: kind, folder: folder ?? terminals.last?.folder ?? NSHomeDirectory())
+        let previous = terminals.last { $0.host == host }?.folder
+        let home = host == Remote.localHost ? NSHomeDirectory() : ""
+        let t = PlainTerminal(kind: kind, folder: folder ?? previous ?? home, host: host)
         terminals.append(t)
         save()
         return t
+    }
+
+    /// The terminals on one machine, for that machine's section of the sidebar.
+    func terminals(on host: String) -> [PlainTerminal] {
+        terminals.filter { $0.host == host }
     }
 
     func close(_ t: PlainTerminal) {
@@ -327,6 +383,10 @@ struct PlainTerminalView: View {
                 if !terminal.running {
                     ContentUnavailableView {
                         Label("Process ended", systemImage: "terminal")
+                    } description: {
+                        Text(terminal.isLocal
+                             ? "This terminal isn't in tmux, so nothing was keeping it running."
+                             : "This is a plain SSH session on \(terminal.host) with no tmux behind it, so it ends when the connection does.")
                     } actions: {
                         Button("Start again") { terminal.start() }.keyboardShortcut(.defaultAction)
                         Button("Close") { PlainTerminalStore.shared.close(terminal) }
@@ -451,6 +511,16 @@ private struct PlainTerminalHost: NSViewRepresentable {
 
 /// A plain terminal's row in the sidebar.
 struct PlainTerminalRow: View {
+    private var subtitle: String {
+        var parts: [String] = []
+        parts.append(terminal.running
+                     ? (terminal.assistant != nil ? terminal.state.label : terminal.kind.displayName)
+                     : "Ended")
+        let folder = (terminal.folder as NSString).abbreviatingWithTildeInPath
+        if !folder.isEmpty { parts.append(folder) }
+        return parts.joined(separator: " · ")
+    }
+
     @ObservedObject var terminal: PlainTerminal
 
     var body: some View {
@@ -468,10 +538,7 @@ struct PlainTerminalRow: View {
             .frame(width: 18)
             VStack(alignment: .leading, spacing: 1) {
                 Text(terminal.title).lineLimit(1)
-                Text((terminal.running
-                      ? (terminal.assistant != nil ? terminal.state.label : terminal.kind.displayName)
-                      : "Ended")
-                     + " · " + (terminal.folder as NSString).abbreviatingWithTildeInPath)
+                Text(subtitle)
                     .font(.caption).foregroundStyle(.secondary).lineLimit(1)
             }
         }

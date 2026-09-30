@@ -185,25 +185,13 @@ struct ContentView: View {
                                 set: { if let t = $0 { layout.show(t) } })) {
             if plain.enabled || !plain.terminals.isEmpty {
                 Section(isExpanded: isExpanded("plain")) {
-                    ForEach(plain.terminals) { t in
+                    ForEach(plain.terminals(on: Remote.localHost)) { t in
                         PlainTerminalRow(terminal: t)
                             .tag(t.tag)
                             .draggable(t.tag)
-                            .contextMenu {
-                                Button("Open to the right") { layout.drop(tag: t.tag, onto: layout.focused, zone: .right) }
-                                Button("Open below") { layout.drop(tag: t.tag, onto: layout.focused, zone: .bottom) }
-                                if t.assistant != nil {
-                                    Button(plain.rawTerminals.contains(t.id) ? "Show as chat" : "Show as terminal") {
-                                        plain.toggleRaw(t)
-                                    }
-                                }
-                                Divider()
-                                Button("Rename…") { renameText = t.title; renamingPlain = t }
-                                Divider()
-                                Button("Close terminal", role: .destructive) { layout.confirmClose = .plainTerminal(t, tag: t.tag) }
-                            }
+                            .contextMenu { plainTerminalMenu(t) }
                     }
-                    if plain.terminals.isEmpty {
+                    if plain.terminals(on: Remote.localHost).isEmpty {
                         Button("New terminal") { openPlain(.shell) }.buttonStyle(.link).selectionDisabled()
                     }
                 } header: {
@@ -236,6 +224,11 @@ struct ContentView: View {
                                  onRemove: { app.removeServer(server.host) },
                                  onRestore: { restoring = server },
                                  onHistory: { browsingHistory = server },
+                                 onLooseTerminal: {
+                                     let folder = server.selectedWindow?.path ?? ""
+                                     layout.show(plain.new(.shell, in: folder.isEmpty ? nil : folder,
+                                                           host: server.host).tag)
+                                 },
                                  onCollapseSessions: { collapse in
                                      for sess in server.sessions { setExpanded("\(server.host)#\(sess.name)", !collapse) }
                                  })
@@ -301,6 +294,20 @@ struct ContentView: View {
         }
     }
 
+    @ViewBuilder private func plainTerminalMenu(_ t: PlainTerminal) -> some View {
+        Button("Open to the right") { layout.drop(tag: t.tag, onto: layout.focused, zone: .right) }
+        Button("Open below") { layout.drop(tag: t.tag, onto: layout.focused, zone: .bottom) }
+        if t.assistant != nil {
+            Button(plain.rawTerminals.contains(t.id) ? "Show as chat" : "Show as terminal") {
+                plain.toggleRaw(t)
+            }
+        }
+        Divider()
+        Button("Rename…") { renameText = t.title; renamingPlain = t }
+        Divider()
+        Button("Close terminal", role: .destructive) { layout.confirmClose = .plainTerminal(t, tag: t.tag) }
+    }
+
     @ViewBuilder private func serverRows(_ server: TmuxModel) -> some View {
         let tag = { (id: String) in "\(server.host)#\(id)" }
         if !server.missingTools.isEmpty {
@@ -339,6 +346,19 @@ struct ContentView: View {
                     }
                 }
                 .selectionDisabled()
+            }
+        }
+        let loose = plain.terminals(on: server.host)
+        if !loose.isEmpty {
+            Text("not in tmux")
+                .font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                .padding(.top, 6)
+                .selectionDisabled()
+            ForEach(loose) { t in
+                PlainTerminalRow(terminal: t)
+                    .tag(t.tag)
+                    .draggable(t.tag)
+                    .contextMenu { plainTerminalMenu(t) }
             }
         }
         ForEach(server.sessions) { session in
@@ -478,10 +498,25 @@ struct ContentView: View {
         Button("Close pane…", role: .destructive) { target = m; closing = pane }
     }
 
+    /// Terminals on a server that aren't tmux windows — a plain SSH shell, which is sometimes
+    /// all you want.
+    @ViewBuilder private func looseTerminalMenu(_ m: TmuxModel) -> some View {
+        Button("New terminal (no tmux)") { openLoose(.shell, m) }
+        Button("New Claude (no tmux)") { openLoose(.claude, m) }
+        Button("New Codex (no tmux)") { openLoose(.codex, m) }
+    }
+
+    private func openLoose(_ kind: PlainTerminal.Kind, _ m: TmuxModel) {
+        let folder = m.selectedWindow?.path ?? ""
+        layout.show(plain.new(kind, in: folder.isEmpty ? nil : folder, host: m.host).tag)
+    }
+
     @ViewBuilder private func sessionMenu(_ session: String, _ m: TmuxModel) -> some View {
         Button("New Claude window") { m.newWindow(assistant: .claude, in: session) }
         Button("New Codex window") { m.newWindow(assistant: .codex, in: session) }
         Button("New terminal window") { m.newWindow(assistant: nil, in: session) }
+        Divider()
+        looseTerminalMenu(m)
         Divider()
         Button("Rename session…") { target = m; renameText = session; renaming = .session(session) }
         Button("Close session…", role: .destructive) { target = m; closingSession = session }
@@ -611,6 +646,8 @@ struct ContentView: View {
                 Button("New Claude window") { model.newWindow(assistant: .claude) }
                 Button("New Codex window") { model.newWindow(assistant: .codex) }
                 Button("New terminal window") { model.newWindow(assistant: nil) }
+                Divider()
+                looseTerminalMenu(model)
                 Divider()
                 Button("New session…") { target = model; renameText = ""; newSessionPrompt = true }
                 Button("Add server…") { addingServer = true }
@@ -866,6 +903,7 @@ struct ServerHeader: View {
     var onRemove: () -> Void
     var onRestore: () -> Void = {}
     var onHistory: () -> Void = {}
+    var onLooseTerminal: () -> Void = {}
     var onCollapseSessions: (Bool) -> Void = { _ in }
     @State private var showingPorts = false
     @State private var confirmRemove = false
@@ -891,6 +929,8 @@ struct ServerHeader: View {
             Spacer()
             Menu {
                 Button("New session…", action: onNewSession)
+                Button("New terminal here, without tmux", action: onLooseTerminal)
+                Divider()
                 Button("Past conversations…", action: onHistory)
                 Button("Restore previous windows…", action: onRestore)
                 Toggle("Notify me about this server", isOn: Binding(

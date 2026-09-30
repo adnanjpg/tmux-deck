@@ -547,7 +547,8 @@ private struct TileHeader: View {
                     .font(.caption).foregroundStyle(.secondary).lineLimit(1)
             } else if let t = plainTerm {
                 Text(t.title).font(.callout.weight(focused ? .semibold : .regular)).lineLimit(1)
-                Text("This Mac").font(.caption).foregroundStyle(.secondary)
+                Text(t.isLocal ? "This Mac" : "\(t.host) · no tmux")
+                    .font(.caption).foregroundStyle(.secondary).lineLimit(1)
             } else if let (server, window) = resolved {
                 Text(server.displayTitle(window))
                     .font(.callout.weight(focused ? .semibold : .regular))
