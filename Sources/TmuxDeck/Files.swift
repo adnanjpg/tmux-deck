@@ -62,6 +62,14 @@ final class FileTree: ObservableObject {
     @Published var root: String = "~"
     @Published var showHidden = false
     @Published var filter = ""
+    /// The folder the window this panel is following is working in. Wandering off to ~ or / is
+    /// easy; this is what gets you back.
+    @Published var projectRoot: String?
+    @Published private(set) var expandingAll = false
+
+    /// Roots you've been at, so Back works like a browser's.
+    private var history: [String] = []
+    var canGoBack: Bool { !history.isEmpty }
 
     init(remote: Remote) { self.remote = remote }
 
@@ -83,16 +91,99 @@ final class FileTree: ObservableObject {
     }
 
     /// Moves the tree's root, keeping anything already listed.
-    func setRoot(_ path: String) {
+    func setRoot(_ path: String, remember: Bool = true) {
         guard path != root else { return }
+        if remember {
+            history.append(root)
+            if history.count > 50 { history.removeFirst() }
+        }
         root = path
         expanded = []
         Task { await load(path, force: true) }
     }
 
+    func goBack() {
+        guard let previous = history.popLast() else { return }
+        setRoot(previous, remember: false)
+    }
+
+    /// Up one folder, which the breadcrumb can't do once you're at the top of it.
+    func goUp() {
+        let parent = (root as NSString).deletingLastPathComponent
+        guard !parent.isEmpty, parent != root else { return }
+        setRoot(parent)
+    }
+
+    func goToProject() {
+        guard let projectRoot else { return }
+        setRoot(projectRoot)
+    }
+
+    var atProjectRoot: Bool { projectRoot == root }
+
+    // MARK: Expanding
+
+    func collapseAll() {
+        expanded = []
+    }
+
+    /// Expands the tree, listing folders as it goes.
+    ///
+    /// Bounded on purpose: a project with `node_modules` or a virtualenv in it has tens of
+    /// thousands of folders, and walking all of them over SSH would take minutes and be useless
+    /// to look at. It goes four levels deep and stops after 250 folders, leaving the rest to be
+    /// opened by hand.
+    func expandAll() async {
+        guard !expandingAll else { return }
+        expandingAll = true
+        defer { expandingAll = false }
+        var opened: Set<String> = []
+        var level = [root]
+        for _ in 0..<4 {
+            await load(level)
+            var next: [String] = []
+            for folder in level {
+                for file in children[folder] ?? [] where file.isDirectory && !file.isLink {
+                    if !showHidden && file.isHidden { continue }
+                    guard opened.count < 250 else { break }
+                    opened.insert(file.path)
+                    next.append(file.path)
+                }
+            }
+            expanded = opened
+            if next.isEmpty || opened.count >= 250 { break }
+            level = next
+        }
+        expanded = opened
+    }
+
     func refresh() {
         let open = [root] + Array(expanded)
         Task { for path in open { await load(path, force: true) } }
+    }
+
+    /// Lists several folders in one round trip. Anything already known is skipped unless forced.
+    func load(_ paths: [String], force: Bool = false) async {
+        let wanted = paths.filter { force || children[$0] == nil }
+            .filter { !loading.contains($0) }
+        guard !wanted.isEmpty else { return }
+        if wanted.count == 1 { await load(wanted[0], force: force); return }
+        loading.formUnion(wanted)
+        defer { loading.subtract(wanted) }
+        let args = wanted.map(sq).joined(separator: " ")
+        let result = await remote.run("python3 - list \(args)", input: Self.helper, timeout: 60)
+        guard result.ok, let data = result.stdout.data(using: .utf8),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let folders = obj["folders"] as? [[String: Any]] else { return }
+        for folder in folders {
+            let asked = folder["asked"] as? String ?? folder["path"] as? String ?? ""
+            if let error = folder["error"] as? String {
+                failed[asked] = error
+                continue
+            }
+            failed[asked] = nil
+            store(folder, asked: asked)
+        }
     }
 
     func load(_ path: String, force: Bool = false) async {
@@ -113,6 +204,10 @@ final class FileTree: ObservableObject {
             return
         }
         failed[path] = nil
+        store(obj, asked: path)
+    }
+
+    private func store(_ obj: [String: Any], asked path: String) {
         let real = obj["path"] as? String ?? path
         let raw = obj["items"] as? [[String: Any]] ?? []
         var items: [RemoteFile] = []
@@ -185,12 +280,13 @@ try:
 except IndexError:
     out(error="bad arguments")
 
-if mode == "list":
-    if not os.path.isdir(path):
-        out(error="Not a folder: %s" % path)
+def listing(target, asked=None):
+    asked = asked if asked is not None else target
+    if not os.path.isdir(target):
+        return {"asked": asked, "path": target, "error": "Not a folder: %s" % target}
     items = []
     try:
-        for e in os.scandir(path):
+        for e in os.scandir(target):
             try:
                 st = e.stat(follow_symlinks=False)
             except OSError:
@@ -198,10 +294,23 @@ if mode == "list":
             items.append({"n": e.name, "d": e.is_dir(), "s": st.st_size,
                           "m": st.st_mtime, "l": e.is_symlink()})
     except PermissionError:
-        out(error="No permission to read %s" % path)
+        return {"asked": asked, "path": target, "error": "No permission to read %s" % target}
     except OSError as exc:
-        out(error=str(exc))
-    out(path=os.path.realpath(path), items=items)
+        return {"asked": asked, "path": target, "error": str(exc)}
+    return {"asked": asked, "path": os.path.realpath(target), "items": items}
+
+if mode == "list":
+    # Several folders in one go: expanding a tree over SSH one round trip per folder is
+    # unusable on a slow link.
+    # The caller keys its cache by the string it asked for, so echo that back rather than the
+    # expanded path — "~" and "/home/you" must not become two entries.
+    asked = sys.argv[2:]
+    if len(asked) == 1:
+        result = listing(os.path.expanduser(asked[0]), asked[0])
+        if "error" in result:
+            out(error=result["error"])
+        out(path=result["path"], items=result["items"])
+    out(folders=[listing(os.path.expanduser(a), a) for a in asked])
 
 if mode == "read":
     if not os.path.isfile(path):

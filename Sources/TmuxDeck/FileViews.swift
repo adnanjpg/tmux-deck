@@ -44,21 +44,65 @@ struct FilePanel: View {
     private var header: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 6) {
+                Button { tree.goBack() } label: { Image(systemName: "chevron.backward") }
+                    .buttonStyle(.borderless)
+                    .disabled(!tree.canGoBack)
+                    .help("Back to the folder you were in")
+                Button { tree.goUp() } label: { Image(systemName: "arrow.up") }
+                    .buttonStyle(.borderless)
+                    .help("Up one folder")
                 Text("Files").font(fonts.headline)
                 Spacer()
+                if tree.expandingAll { ProgressView().controlSize(.mini) }
                 Button { tree.refresh() } label: { Image(systemName: "arrow.clockwise") }
                     .buttonStyle(.borderless).help("Reload")
                 Menu {
+                    Button("Expand all") { Task { await tree.expandAll() } }
+                        .disabled(tree.expandingAll)
+                    Button("Collapse all") { tree.collapseAll() }
+                        .disabled(tree.expanded.isEmpty)
+                    Divider()
                     Toggle("Show hidden files", isOn: $tree.showHidden)
+                    Divider()
+                    if let project = tree.projectRoot {
+                        Button("Go to \((project as NSString).lastPathComponent)") { tree.goToProject() }
+                            .disabled(tree.atProjectRoot)
+                    }
                     Button("Go to home") { tree.setRoot("~") }
                     Button("Go to /") { tree.setRoot("/") }
                 } label: { Image(systemName: "ellipsis.circle") }
                     .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
             }
             breadcrumb
-            TextField("Filter", text: $tree.filter)
-                .textFieldStyle(.roundedBorder)
-                .font(fonts.callout)
+            HStack(spacing: 6) {
+                TextField("Filter", text: $tree.filter)
+                    .textFieldStyle(.roundedBorder)
+                    .font(fonts.callout)
+                // The two that are worth a click rather than a trip through the menu.
+                Button { Task { await tree.expandAll() } } label: {
+                    Image(systemName: "rectangle.expand.vertical")
+                }
+                .buttonStyle(.borderless)
+                .disabled(tree.expandingAll)
+                .help("Expand all (four levels, up to 250 folders)")
+                Button { tree.collapseAll() } label: {
+                    Image(systemName: "rectangle.compress.vertical")
+                }
+                .buttonStyle(.borderless)
+                .disabled(tree.expanded.isEmpty)
+                .help("Collapse all")
+            }
+            if let project = tree.projectRoot, !tree.atProjectRoot {
+                Button {
+                    tree.goToProject()
+                } label: {
+                    Label("Back to \((project as NSString).lastPathComponent)",
+                          systemImage: "arrow.uturn.backward")
+                        .font(fonts.caption)
+                }
+                .buttonStyle(.borderless)
+                .help(project)
+            }
         }
         .padding(10)
     }
@@ -445,7 +489,7 @@ struct FilePanelHost: View {
             .onAppear { follow(tree) }
             .onChange(of: layout.focusedTag) { _, _ in follow(tree) }
             .onReceive(Timer.publish(every: 1, on: .main, in: .common).autoconnect()) { _ in
-                if !rooted.contains(host) { follow(tree) }
+                follow(tree)
             }
     }
 
@@ -463,13 +507,15 @@ struct FilePanelHost: View {
     /// tree afterwards isn't undone every time the focus changes. Until a window can be resolved
     /// (the sidebar may still be loading) this keeps trying.
     private func follow(_ tree: FileTree) {
-        guard !rooted.contains(tree.remote.host) else { return }
         guard let tag = layout.focusedTag, let (_, window) = TileResolver.resolve(tag),
               window.path.hasPrefix("/") else {
-            Task { await tree.load(tree.root) }
+            if !rooted.contains(tree.remote.host) { Task { await tree.load(tree.root) } }
             return
         }
-        rooted.insert(tree.remote.host)
-        tree.setRoot(window.path)
+        // Always keep "back to the project" pointing at the window you're looking at, even
+        // once you've wandered off to ~ or /.
+        if tree.projectRoot != window.path { tree.projectRoot = window.path }
+        guard rooted.insert(tree.remote.host).inserted else { return }
+        tree.setRoot(window.path, remember: false)
     }
 }
