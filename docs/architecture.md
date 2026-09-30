@@ -18,6 +18,11 @@ TmuxDeckApp (App.swift)
                 └── PlainTerminalView a local shell, Claude, or Codex with no tmux
 ```
 
+`Completions.swift` backs the "/" and "@" lists in the message box: built-in commands are a list
+in the source (neither CLI exposes its own), everything else is found on disk — `~/.claude/commands`,
+`.claude/skills`, plugin commands, `~/.codex/prompts`, `~/.codex/skills`, and the project's own.
+"@" asks git for the file list so gitignored paths stay out.
+
 Singletons (all `@MainActor`, all `ObservableObject`):
 
 | Singleton | Lives in | Owns |

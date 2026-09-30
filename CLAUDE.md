@@ -74,6 +74,7 @@ into split-view tiles on demand.
 | History | `History.swift`, `HistoryView.swift` | Finished conversations, read-only |
 | Notifications | `Notifications.swift` | Banners you can click and mute |
 | Help | `Shortcuts.swift` | ⌘/ shortcut reference |
+| Completions | `Completions.swift` | `/` commands and skills, `@` file paths in the message box |
 | PRs | `PullRequests.swift` | `gh`-backed PR panel and inline PR chips |
 | Misc | `MacKeys.swift`, `UpdateWatcher.swift` | Mac editing keys in terminals; stale-build banner |
 
