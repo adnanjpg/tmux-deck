@@ -34,6 +34,14 @@ struct Remote: Hashable {
         ]
     }
 
+    /// Noise ssh prints that isn't a problem the user can do anything about.
+    static func withoutNoise(_ stderr: String) -> String {
+        stderr.split(separator: "\n", omittingEmptySubsequences: false)
+            .filter { !$0.contains("ControlSocket") && !$0.contains("disabling multiplexing") }
+            .joined(separator: "\n")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     struct Result {
         var status: Int32
         var stdout: String
@@ -56,6 +64,15 @@ struct Remote: Hashable {
     }
 
     func run(_ script: String, data input: Data?, timeout: TimeInterval = 15) async -> Result {
+        // Several ssh processes racing to create the shared control socket all try to become the
+        // master; the losers print "ControlSocket … already exists, disabling multiplexing" and
+        // then connect on their own, slowly. The first connection to a host therefore runs alone,
+        // and everything else waits for it — after which the socket exists and they just attach.
+        if !isLocal { await SSHMaster.shared.ready(host) }
+        return await execute(script, data: input, timeout: timeout)
+    }
+
+    func execute(_ script: String, data input: Data?, timeout: TimeInterval) async -> Result {
         // This Mac: a login shell, so Homebrew's tmux and your PATH are there.
         let executable = isLocal ? "/bin/zsh" : "/usr/bin/ssh"
         let args = isLocal ? ["-lc", script] : Self.baseOptions + ["-o", "BatchMode=yes", host, script]
@@ -98,4 +115,40 @@ struct Remote: Hashable {
 /// Quotes a value for the remote POSIX shell.
 func sq(_ value: String) -> String {
     "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
+}
+
+
+/// Makes sure one — and only one — connection per host is trying to open the shared control
+/// socket. Without this, every call made at startup races, and all but one of them give up on
+/// multiplexing and open a connection of their own.
+actor SSHMaster {
+    static let shared = SSHMaster()
+
+    private var opening: [String: Task<Void, Never>] = [:]
+    private var opened: Set<String> = []
+
+    func ready(_ host: String) async {
+        if opened.contains(host) { return }
+        if let existing = opening[host] { await existing.value; return }
+        let task = Task {
+            let remote = Remote(host: host)
+            _ = await remote.openMaster()
+        }
+        opening[host] = task
+        await task.value
+        opening[host] = nil
+        opened.insert(host)
+    }
+
+    /// Called when a connection reports the socket went away, so the next call re-opens it.
+    func lost(_ host: String) {
+        opened.remove(host)
+    }
+}
+
+extension Remote {
+    /// One cheap connection whose only job is to create the control socket.
+    func openMaster() async -> Result {
+        await execute("true", data: nil, timeout: 20)
+    }
 }

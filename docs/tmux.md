@@ -119,3 +119,9 @@ SSH to the user's work machine drops often (minutes at a time). Design according
 - The poll loop just retries; `connected` flips and the sidebar shows it.
 - `ControlMaster` multiplexing means a drop kills all in-flight calls at once — they must all be
   individually retryable.
+- **Only one connection per host may open the control socket.** With every call using
+  `ControlMaster=auto`, the burst at startup races: one wins and the rest print
+  `ControlSocket … already exists, disabling multiplexing` and then open connections of their own,
+  slowly. Reproduced with six concurrent calls — five warnings. `SSHMaster` (in `Remote.swift`)
+  makes the first call for a host run alone and everything else wait for it; after that the socket
+  exists and they just attach. Same test afterwards: no warnings.

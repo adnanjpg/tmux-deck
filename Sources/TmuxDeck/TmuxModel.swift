@@ -1,4 +1,5 @@
 import AppKit
+import AudioToolbox
 import Foundation
 import UserNotifications
 
@@ -468,7 +469,7 @@ for pane, pid, path in panes:
 
     /// Turns ssh's stderr into something worth showing, and says what kind of failure it is.
     static func describe(_ result: Remote.Result) -> String {
-        let text = result.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
+        let text = Remote.withoutNoise(result.stderr)
         let lower = text.lowercased()
         if lower.contains("permission denied") || lower.contains("publickey") {
             return "SSH refused the key. Check your ~/.ssh/config and agent."
@@ -1671,7 +1672,34 @@ enum Sounds {
         preview(name)
     }
 
+    private static var ids: [String: SystemSoundID] = [:]
+
+    /// Plays through Core Audio's *system sound* path rather than `NSSound`.
+    ///
+    /// `NSSound` is a general audio player: it opens an audio session, which can make the app
+    /// the system's most recent audio client and so the target of a Bluetooth play/pause — which
+    /// the app then does nothing with, so pressing an AirPod stops working.
+    /// `AudioServicesPlaySystemSound` is the API for short interface sounds and doesn't.
     static func preview(_ name: String) {
-        NSSound(named: NSSound.Name(name))?.play()
+        if let id = systemSound(named: name) {
+            AudioServicesPlaySystemSound(id)
+        } else {
+            NSSound(named: NSSound.Name(name))?.play()
+        }
+    }
+
+    private static func systemSound(named name: String) -> SystemSoundID? {
+        if let cached = ids[name] { return cached }
+        let home = FileManager.default.homeDirectoryForCurrentUser
+        let places = [home.appendingPathComponent("Library/Sounds/\(name).aiff"),
+                      URL(fileURLWithPath: "/Library/Sounds/\(name).aiff"),
+                      URL(fileURLWithPath: "/System/Library/Sounds/\(name).aiff")]
+        guard let url = places.first(where: { FileManager.default.fileExists(atPath: $0.path) })
+        else { return nil }
+        var id: SystemSoundID = 0
+        guard AudioServicesCreateSystemSoundID(url as CFURL, &id) == kAudioServicesNoError
+        else { return nil }
+        ids[name] = id
+        return id
     }
 }
