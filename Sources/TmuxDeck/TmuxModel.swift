@@ -262,6 +262,33 @@ final class TmuxModel: ObservableObject, Identifiable {
 
     private static let sep = ":::"
 
+    /// Prints one `@@SES` line per running Claude Code process that sits in a tmux pane.
+    /// A session can *park* its job into a background process (`kind: "bg"`): the pane's own
+    /// record then freezes (`status: busy`, never updated again) and names the job as
+    /// `parkedJobId`, while the background record carries `jobId`, a new `sessionId`, and the
+    /// live status. The pane's record is merged with that one, so a parked session doesn't
+    /// spin forever and its chat can follow the transcript into the new session file.
+    private static let sessionRecordsScript = #"""
+import json, glob, os
+recs = []
+for f in glob.glob(os.path.expanduser("~/.claude/sessions/*.json")):
+    try:
+        os.kill(int(os.path.basename(f)[:-5]), 0)
+        recs.append(json.load(open(f)))
+    except Exception:
+        continue
+jobs = {d.get("jobId"): d for d in recs if d.get("jobId")}
+for d in recs:
+    if not d.get("tmux"): continue
+    bg = jobs.get(d.get("parkedJobId"))
+    if bg:
+        for k in ("status", "waitingFor", "updatedAt", "name"):
+            if k in bg: d[k] = bg[k]
+            else: d.pop(k, None)
+        d["continuedIn"] = bg.get("sessionId")
+    print("@@SES " + json.dumps(d))
+"""#
+
     private static let pollScript: String = {
         let fields = ["session_name", "window_id", "window_index", "window_name",
                       "pane_current_command", "window_panes", "window_active", "pane_current_path",
@@ -272,11 +299,7 @@ final class TmuxModel: ObservableObject, Identifiable {
           | awk '$1 ~ /^\(viewSessionPrefix)/ && $2 == 0 && $3 > 1 {print $1}' \
           | while read -r s; do tmux kill-session -t "=$s"; done
         tmux list-panes -a -F \(sq(format)) 2>/dev/null || echo @@NOSERVER
-        for f in ~/.claude/sessions/*.json; do
-          [ -f "$f" ] || continue
-          kill -0 "$(basename "$f" .json)" 2>/dev/null || continue
-          printf '@@SES '; tr -d '\\n' < "$f"; echo
-        done
+        python3 -c \(sq(sessionRecordsScript)) 2>/dev/null
         claude_panes=$(for f in ~/.claude/sessions/*.json; do [ -f "$f" ] && kill -0 "$(basename "$f" .json)" 2>/dev/null && grep -o '"tmux":"[^"]*"' "$f" | grep -o '%[0-9]*'; done)
         for w in $( (tmux list-panes -a -f '#{m:*claude*,#{pane_current_command}}' -F '#{pane_id}' 2>/dev/null; echo "$claude_panes") | grep . | sort -u); do
           printf '@@CAP %s\\n' "$w"

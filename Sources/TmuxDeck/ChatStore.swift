@@ -86,6 +86,9 @@ final class ChatStore: ObservableObject {
     @Published private(set) var stale: String?
 
     private var offset = 0
+    /// The session file being read: the chat's own id until a `continued-in` record hands
+    /// the conversation to another session (a parked job); the offset belongs to this file.
+    private var reading: String
     private var toolIndex: [String: Int] = [:]
     private var busy = false
     private static let maxItems = 1500
@@ -94,12 +97,14 @@ final class ChatStore: ObservableObject {
         var offset: Int
         var items: [ChatItem]
         var queued: [String]?
+        var reading: String?
     }
 
     private let remote: Remote
 
     init(sessionID: String, remote: Remote, assistant: CodingAssistant = .claude, path: String = "") {
         self.sessionID = sessionID
+        self.reading = sessionID
         self.remote = remote
         self.assistant = assistant
         self.path = path
@@ -107,6 +112,7 @@ final class ChatStore: ObservableObject {
            let snapshot = try? JSONDecoder().decode(Snapshot.self, from: data) {
             items = snapshot.items
             offset = snapshot.offset
+            reading = snapshot.reading ?? sessionID
             queued = snapshot.queued ?? []
             loaded = true
             rebuildToolIndex()
@@ -128,7 +134,7 @@ final class ChatStore: ObservableObject {
     }
 
     private func save() {
-        let snapshot = Snapshot(offset: offset, items: items, queued: queued)
+        let snapshot = Snapshot(offset: offset, items: items, queued: queued, reading: reading)
         let url = cacheURL
         Task.detached(priority: .utility) {
             if let data = try? JSONEncoder().encode(snapshot) { try? data.write(to: url, options: .atomic) }
@@ -179,7 +185,7 @@ final class ChatStore: ObservableObject {
         defer { busy = false }
         let startOffset = offset
         guard assistant == .claude || !path.isEmpty else { return }
-        let argument = assistant == .claude ? sessionID : path
+        let argument = assistant == .claude ? reading : path
         let script = assistant == .claude ? Self.reader : Self.codexReader
         let result = await remote.run("python3 - \(sq(argument)) \(offset)", input: script, timeout: 30)
         guard result.ok else {
@@ -202,6 +208,7 @@ final class ChatStore: ObservableObject {
             switch k {
             case "end":
                 offset = obj["off"] as? Int ?? offset
+                if let followed = obj["sid"] as? String, followed != reading { reading = followed }
                 missing = false
             case "missing":
                 // A brand-new session has no log until its first message.
@@ -530,170 +537,189 @@ print(json.dumps({"k": "end", "off": new_off}))
 """#
 
     /// Runs on the work machine: `python3 - <session id> <byte offset>`.
+    /// Follows `continued-in` records into the next session file (a parked job writes the
+    /// rest of the conversation under a new id); `end` names the file it finished on.
     static let reader = #"""
 import json, sys, os, glob
 sid, off = sys.argv[1], int(sys.argv[2])
-files = glob.glob(os.path.expanduser("~/.claude/projects/*/%s.jsonl" % sid))
-if not files:
-    print(json.dumps({"k": "missing"})); sys.exit()
-path = max(files, key=os.path.getmtime)
-size = os.path.getsize(path)
 out = []
 def emit(**d): out.append(d)
-if off > size:
-    off = 0
-    emit(k="reset")
-start = off
-if off == 0 and size > 4_000_000:
-    start = size - 4_000_000
-with open(path, "rb") as fh:
-    fh.seek(start)
-    data = fh.read()
-if start != off:
-    nl = data.find(b"\n")
-    start += nl + 1
-    data = data[nl + 1:]
-end = data.rfind(b"\n") + 1
-new_off = start + end
+def find(sid):
+    files = glob.glob(os.path.expanduser("~/.claude/projects/*/%s.jsonl" % sid))
+    return max(files, key=os.path.getmtime) if files else None
+path = find(sid)
+if not path:
+    print(json.dumps({"k": "missing"})); sys.exit()
+seen = {sid}
+while True:
+    cont = None
+    size = os.path.getsize(path)
+    if off > size:
+        off = 0
+        emit(k="reset")
+    start = off
+    if off == 0 and size > 4_000_000:
+        start = size - 4_000_000
+    with open(path, "rb") as fh:
+        fh.seek(start)
+        data = fh.read()
+    if start != off:
+        nl = data.find(b"\n")
+        start += nl + 1
+        data = data[nl + 1:]
+    end = data.rfind(b"\n") + 1
+    new_off = start + end
 
-def cut(s, n):
-    s = s if isinstance(s, str) else json.dumps(s)
-    return s if len(s) <= n else s[:n] + "\n…"
+    def cut(s, n):
+        s = s if isinstance(s, str) else json.dumps(s)
+        return s if len(s) <= n else s[:n] + "\n…"
 
-def summary(name, inp):
-    if not isinstance(inp, dict): return ""
-    for key in ("command", "file_path", "pattern", "description", "url", "query", "prompt", "path"):
-        if isinstance(inp.get(key), str):
-            return inp[key]
-    for v in inp.values():
-        if isinstance(v, str): return v
-    return ""
+    def summary(name, inp):
+        if not isinstance(inp, dict): return ""
+        for key in ("command", "file_path", "pattern", "description", "url", "query", "prompt", "path"):
+            if isinstance(inp.get(key), str):
+                return inp[key]
+        for v in inp.values():
+            if isinstance(v, str): return v
+        return ""
 
-def result_text(c):
-    if isinstance(c, str): return c
-    if isinstance(c, list):
-        return "\n".join(x.get("text", "[image]" if x.get("type") == "image" else "") for x in c if isinstance(x, dict))
-    return ""
+    def result_text(c):
+        if isinstance(c, str): return c
+        if isinstance(c, list):
+            return "\n".join(x.get("text", "[image]" if x.get("type") == "image" else "") for x in c if isinstance(x, dict))
+        return ""
 
-HIDDEN = ("<command-", "<local-command", "<system-reminder", "Caveat:", "<bash-", "<user-memory", "<task-notification")
-import re
-PASTE_TAG = re.compile(r"</?pasted_content[^>]*>")
-def tag(name, s):
-    m = re.search(r"<%s>(.*?)</%s>" % (name, name), s, re.S)
-    return m.group(1) if m else None
+    HIDDEN = ("<command-", "<local-command", "<system-reminder", "Caveat:", "<bash-", "<user-memory", "<task-notification")
+    import re
+    PASTE_TAG = re.compile(r"</?pasted_content[^>]*>")
+    def tag(name, s):
+        m = re.search(r"<%s>(.*?)</%s>" % (name, name), s, re.S)
+        return m.group(1) if m else None
 
-def clean(text):
-    # Claude Code wraps pasted text in <pasted_content id="…"> tags; show just the text.
-    return PASTE_TAG.sub("", text).strip()
-for raw in data[:end].splitlines():
-    try: d = json.loads(raw)
-    except Exception: continue
-    if d.get("isSidechain"): continue
-    t = d.get("type")
-    uid = d.get("uuid", "")
-    if t == "continued-in":
-        emit(k="note", id="cont-" + str(d.get("continuedInSessionId")), t="This conversation continues in another session")
-        continue
-    if t == "system":
-        st, c = d.get("subtype"), d.get("content") or ""
-        if st == "local_command" and ("<command-name>" in c or "<command-message>" in c):
-            name = (tag("command-name", c) or tag("command-message", c) or "").strip()
-            args = (tag("command-args", c) or "").strip()
-            if not name.startswith("/"): name = "/" + name
-            emit(k="cmd", id=uid, t=(name + (" " + args if args else "")).strip())
-        elif st == "local_command":
-            printed = tag("local-command-stdout", c) or tag("local-command-stderr", c)
-            if printed and printed.strip(): emit(k="cmdout", t=cut(printed.strip(), 4000))
-        elif st == "compact_boundary":
-            emit(k="note", id=uid, t="Conversation compacted to free up context")
-        elif st == "away_summary" and c.strip():
-            emit(k="recap", id=uid, t=cut(c.strip(), 4000))
-        elif d.get("level") in ("error", "warning") and c.strip():
-            emit(k="note", id=uid, t=cut(clean(c.strip()), 600))
-        continue
-    meta = d.get("isMeta")
-    msg = d.get("message") or {}
-    content = msg.get("content")
-    if t == "attachment":
-        a = d.get("attachment") or {}
-        p = a.get("prompt")
-        if a.get("type") == "queued_command" and isinstance(p, str) and p.strip() and not p.strip().startswith(HIDDEN):
-            emit(k="user", id=uid, t=cut(clean(p), 20000))
-        continue
-    if t == "queue-operation":
-        op = d.get("operation")
-        c = d.get("content")
-        if isinstance(c, str) and c.strip().startswith(HIDDEN):
-            continue   # Claude's own background notices, not your messages
-        if op == "enqueue" and isinstance(c, str):
-            emit(k="q+", t=clean(c))
-        elif op == "dequeue":
-            emit(k="q-")
-        elif op == "remove":
-            emit(k="qx", t=clean(c) if isinstance(c, str) else "")
-        continue
-    if t == "user":
-        if isinstance(content, str):
-            content = [{"type": "text", "text": content}]
-        texts, images = [], 0
-        for i, part in enumerate(content or []):
-            if not isinstance(part, dict): continue
-            if part.get("type") == "tool_result":
-                emit(k="result", **{"for": part.get("tool_use_id", "")}, t=cut(result_text(part.get("content")), 4000), err=bool(part.get("is_error")))
-            elif part.get("type") == "text":
-                text = part.get("text", "").strip()
-                if text.startswith(("<command-name>", "<command-message>")):
-                    name = (tag("command-name", text) or tag("command-message", text) or "").strip()
-                    args = (tag("command-args", text) or "").strip()
-                    if not name.startswith("/"): name = "/" + name
-                    emit(k="cmd", id=f"{uid}-{i}", t=(name + (" " + args if args else "")).strip())
-                elif text.startswith(("<local-command-stdout>", "<local-command-stderr>")):
-                    printed = (tag("local-command-stdout", text) or "") + (tag("local-command-stderr", text) or "")
-                    if printed.strip(): emit(k="cmdout", t=cut(printed.strip(), 4000))
-                elif text.startswith("<bash-input>"):
-                    emit(k="cmd", id=f"{uid}-{i}", t="! " + (tag("bash-input", text) or "").strip())
-                elif text.startswith(("<bash-stdout>", "<bash-stderr>")):
-                    printed = (tag("bash-stdout", text) or "") + (tag("bash-stderr", text) or "")
-                    emit(k="cmdout", t=cut(printed.strip() or "(no output)", 4000))
-                elif text.startswith("<task-notification>"):
-                    summ = tag("summary", text) or tag("status", text) or "update"
-                    emit(k="note", id=f"{uid}-{i}", t="Background task: " + clean(summ).strip())
-                elif meta or not text or text.startswith(HIDDEN):
-                    continue
-                elif text.startswith("[Request interrupted"):
-                    emit(k="note", id=f"{uid}-{i}", t="You stopped Claude")
-                elif text.startswith("This session is being continued from a previous conversation"):
-                    emit(k="note", id=f"{uid}-{i}", t="Earlier conversation was compacted to free up context")
-                else:
-                    texts.append(clean(text))
-            elif part.get("type") == "image" and not meta:
-                images += 1
-        if texts or images:
-            emit(k="user", id=uid, t=cut("\n\n".join(texts), 20000), img=images)
-    elif t == "assistant":
-        for i, part in enumerate(content or []):
-            if not isinstance(part, dict): continue
-            if part.get("type") == "text" and part.get("text", "").strip():
-                emit(k="text", id=f"{uid}-{i}", t=part["text"])
-            elif part.get("type") == "thinking" and (part.get("thinking") or "").strip():
-                emit(k="thinking", id=f"{uid}-{i}", t=cut(part["thinking"], 6000))
-            elif part.get("type") == "tool_use":
-                inp = part.get("input") or {}
-                add = rem = 0
-                if isinstance(inp, dict) and isinstance(inp.get("new_string"), str):
-                    add = inp["new_string"].count("\n") + 1
-                    rem = (inp.get("old_string") or "").count("\n") + 1
-                elif isinstance(inp, dict) and isinstance(inp.get("content"), str):
-                    add = inp["content"].count("\n") + 1
-                emit(k="tool", id=part.get("id", f"{uid}-{i}"), name=part.get("name", "Tool"),
-                     s=cut(summary(part.get("name"), inp), 400), add=add, rem=rem,
-                     bg=bool(isinstance(inp, dict) and inp.get("run_in_background")),
-                     q=json.dumps(inp.get("questions")) if part.get("name") == "AskUserQuestion" and isinstance(inp, dict) else None)
-
-if off == 0:
-    keep = ("result", "q+", "q-", "qx")
-    out = [o for o in out if o["k"] not in keep][-600:] + [o for o in out if o["k"] in keep]
+    def clean(text):
+        # Claude Code wraps pasted text in <pasted_content id="…"> tags; show just the text.
+        return PASTE_TAG.sub("", text).strip()
+    for raw in data[:end].splitlines():
+        try: d = json.loads(raw)
+        except Exception: continue
+        if d.get("isSidechain"): continue
+        t = d.get("type")
+        uid = d.get("uuid", "")
+        if t == "continued-in":
+            cont = d.get("continuedInSessionId")
+            emit(k="note", id="cont-" + str(cont), t="This conversation continues in another session")
+            continue
+        if t == "system":
+            st, c = d.get("subtype"), d.get("content") or ""
+            if st == "local_command" and ("<command-name>" in c or "<command-message>" in c):
+                name = (tag("command-name", c) or tag("command-message", c) or "").strip()
+                args = (tag("command-args", c) or "").strip()
+                if not name.startswith("/"): name = "/" + name
+                emit(k="cmd", id=uid, t=(name + (" " + args if args else "")).strip())
+            elif st == "local_command":
+                printed = tag("local-command-stdout", c) or tag("local-command-stderr", c)
+                if printed and printed.strip(): emit(k="cmdout", t=cut(printed.strip(), 4000))
+            elif st == "compact_boundary":
+                emit(k="note", id=uid, t="Conversation compacted to free up context")
+            elif st == "away_summary" and c.strip():
+                emit(k="recap", id=uid, t=cut(c.strip(), 4000))
+            elif d.get("level") in ("error", "warning") and c.strip():
+                emit(k="note", id=uid, t=cut(clean(c.strip()), 600))
+            continue
+        meta = d.get("isMeta")
+        msg = d.get("message") or {}
+        content = msg.get("content")
+        if t == "attachment":
+            a = d.get("attachment") or {}
+            p = a.get("prompt")
+            if a.get("type") == "queued_command" and isinstance(p, str) and p.strip() and not p.strip().startswith(HIDDEN):
+                emit(k="user", id=uid, t=cut(clean(p), 20000))
+            continue
+        if t == "queue-operation":
+            op = d.get("operation")
+            c = d.get("content")
+            if isinstance(c, str) and c.strip().startswith(HIDDEN):
+                continue   # Claude's own background notices, not your messages
+            if op == "enqueue" and isinstance(c, str):
+                emit(k="q+", t=clean(c))
+            elif op == "dequeue":
+                emit(k="q-")
+            elif op == "remove":
+                emit(k="qx", t=clean(c) if isinstance(c, str) else "")
+            continue
+        if t == "user":
+            if isinstance(content, str):
+                content = [{"type": "text", "text": content}]
+            texts, images = [], 0
+            for i, part in enumerate(content or []):
+                if not isinstance(part, dict): continue
+                if part.get("type") == "tool_result":
+                    emit(k="result", **{"for": part.get("tool_use_id", "")}, t=cut(result_text(part.get("content")), 4000), err=bool(part.get("is_error")))
+                elif part.get("type") == "text":
+                    text = part.get("text", "").strip()
+                    if text.startswith(("<command-name>", "<command-message>")):
+                        name = (tag("command-name", text) or tag("command-message", text) or "").strip()
+                        args = (tag("command-args", text) or "").strip()
+                        if not name.startswith("/"): name = "/" + name
+                        emit(k="cmd", id=f"{uid}-{i}", t=(name + (" " + args if args else "")).strip())
+                    elif text.startswith(("<local-command-stdout>", "<local-command-stderr>")):
+                        printed = (tag("local-command-stdout", text) or "") + (tag("local-command-stderr", text) or "")
+                        if printed.strip(): emit(k="cmdout", t=cut(printed.strip(), 4000))
+                    elif text.startswith("<bash-input>"):
+                        emit(k="cmd", id=f"{uid}-{i}", t="! " + (tag("bash-input", text) or "").strip())
+                    elif text.startswith(("<bash-stdout>", "<bash-stderr>")):
+                        printed = (tag("bash-stdout", text) or "") + (tag("bash-stderr", text) or "")
+                        emit(k="cmdout", t=cut(printed.strip() or "(no output)", 4000))
+                    elif text.startswith("<task-notification>"):
+                        summ = tag("summary", text) or tag("status", text) or "update"
+                        emit(k="note", id=f"{uid}-{i}", t="Background task: " + clean(summ).strip())
+                    elif meta or not text or text.startswith(HIDDEN):
+                        continue
+                    elif text.startswith("[Request interrupted"):
+                        emit(k="note", id=f"{uid}-{i}", t="You stopped Claude")
+                    elif text.startswith("This session is being continued from a previous conversation"):
+                        emit(k="note", id=f"{uid}-{i}", t="Earlier conversation was compacted to free up context")
+                    else:
+                        texts.append(clean(text))
+                elif part.get("type") == "image" and not meta:
+                    images += 1
+            if texts or images:
+                emit(k="user", id=uid, t=cut("\n\n".join(texts), 20000), img=images)
+        elif t == "assistant":
+            for i, part in enumerate(content or []):
+                if not isinstance(part, dict): continue
+                if part.get("type") == "text" and part.get("text", "").strip():
+                    emit(k="text", id=f"{uid}-{i}", t=part["text"])
+                elif part.get("type") == "thinking" and (part.get("thinking") or "").strip():
+                    emit(k="thinking", id=f"{uid}-{i}", t=cut(part["thinking"], 6000))
+                elif part.get("type") == "tool_use":
+                    inp = part.get("input") or {}
+                    add = rem = 0
+                    if isinstance(inp, dict) and isinstance(inp.get("new_string"), str):
+                        add = inp["new_string"].count("\n") + 1
+                        rem = (inp.get("old_string") or "").count("\n") + 1
+                    elif isinstance(inp, dict) and isinstance(inp.get("content"), str):
+                        add = inp["content"].count("\n") + 1
+                    emit(k="tool", id=part.get("id", f"{uid}-{i}"), name=part.get("name", "Tool"),
+                         s=cut(summary(part.get("name"), inp), 400), add=add, rem=rem,
+                         bg=bool(isinstance(inp, dict) and inp.get("run_in_background")),
+                         q=json.dumps(inp.get("questions")) if part.get("name") == "AskUserQuestion" and isinstance(inp, dict) else None)
+    if off == 0:
+        keep = ("result", "q+", "q-", "qx")
+        out = [o for o in out if o["k"] not in keep][-600:] + [o for o in out if o["k"] in keep]
+    if cont is None and off > 0:
+        # The hand-off line may have been read on an earlier poll; it sits at the end.
+        with open(path, "rb") as fh:
+            fh.seek(max(0, size - 16384)); tail_lines = fh.read().splitlines()
+        for raw in reversed(tail_lines):
+            if b'"continued-in"' in raw:
+                try: cont = json.loads(raw).get("continuedInSessionId")
+                except Exception: pass
+                break
+    nxt = find(cont) if cont and cont not in seen and len(seen) < 6 else None
+    if not nxt: break
+    seen.add(cont); sid, path, off = cont, nxt, 0
 for o in out: print(json.dumps(o))
-print(json.dumps({"k": "end", "off": new_off}))
+print(json.dumps({"k": "end", "off": new_off, "sid": sid}))
 """#
 }

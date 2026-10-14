@@ -52,7 +52,7 @@ Record types that matter:
 | `system` + `subtype == "compact_boundary"` | conversation was compacted |
 | `system` + `subtype == "away_summary"` | Claude's "while you were away" recap |
 | `custom-title` / `ai-title` | the conversation's name (a `/rename` beats the generated one) |
-| `continued-in` | this conversation continues in another session id |
+| `continued-in` | the rest of the conversation is in `continuedInSessionId`.jsonl — the reader follows it (see "Parked jobs") |
 
 Traps found the hard way:
 
@@ -153,10 +153,44 @@ the raw terminal view is showing that window — there, Claude's box *is* the bo
 to be sent when the turn ends; pulling that would stop it being sent. That's why the reader ignores
 dim text — the placeholder and the suggestion are dim too.
 
+## Parked jobs: the record freezes and the transcript moves
+
+A session can hand its work to a **background process** (`kind: "bg"` in its record). What is left
+behind looks like a hang and was first misread as one:
+
+- The pane's own record (`kind: "interactive"`, the one with `tmux`) stops being updated: it stays
+  `status: busy` for days. It gains `parkedJobId`.
+- A second record, with no `tmux`, carries `jobId` equal to that `parkedJobId`, a **new
+  `sessionId`**, the live `status`/`updatedAt`, and the name (`Merchant map endpoint removal`).
+- The old transcript ends with `{"type":"continued-in","continuedInSessionId":"<new id>"}` and
+  everything after that (hundreds of turns) is in `<new id>.jsonl` in the same project folder. The
+  terminal, driven by the interactive process, still shows all of it.
+
+So the chat ended on an empty Claude card plus "This conversation continues in another session"
+while the terminal showed the finished reply, and the status spun for two days.
+
+What the app does:
+
+- `TmuxModel.sessionRecordsScript` (python, replaces the old shell loop) merges each pane's record
+  with the running record whose `jobId` matches its `parkedJobId`: status, `waitingFor`,
+  `updatedAt` and name come from the background one; `continuedIn` names the new session id.
+- `ChatStore.reader` follows `continued-in` into the next file (up to five hops, loop-guarded) in
+  the same call and reports the file it finished on as `sid` in its `end` line. `ChatStore.reading`
+  keeps that id (persisted in the cache snapshot) and passes it on the next poll, so the offset
+  always belongs to the file being read. The hand-off line sits at the very end of the old file and
+  may have been consumed on an earlier poll, so when nothing new arrives the reader also checks the
+  last 16 KB for it.
+- The chat's key stays the original session id, so the cache and the saved window don't change.
+
+Dim text with a `Tab` hint in Claude's box after a turn is **Claude's suggested next prompt**, not
+queued input; the app shows it as the placeholder. Don't read it as a stuck send.
+
+The three-minute rule below still applies when the background record is gone.
+
 ## A "busy" record can be a lie
 
 Claude rewrites `~/.claude/sessions/<pid>.json` every few seconds while it works. One was found
-saying `busy` with an `updatedAt` **five days old**, over a screen reading `· done 1:42 PM`: the
-process had hung with text queued. `claudeState` now treats a `busy` older than three minutes with
+saying `busy` with an `updatedAt` **five days old**, over a screen reading `· done 1:42 PM`: that
+session had parked its job (see above) and the pane's record was never updated again. `claudeState` now treats a `busy` older than three minutes with
 no "esc to interrupt" on screen as ready. The process is still hung — the app can't fix that — but
 it no longer shows a spinner for it.
