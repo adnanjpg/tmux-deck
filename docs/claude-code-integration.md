@@ -132,3 +132,31 @@ as pending at all.
 - **Stop** — `Escape`.
 - **Images** — upload to `~/.cache/tmuxdeck/` on the remote machine, then paste each absolute path
   into the input before the message text, exactly as dragging a file into the terminal would.
+
+## The input box is shared, and that's the problem
+
+Claude's `❯` box and the app's message box are two places unsent text can live. They disagree in
+two common ways:
+
+- **Esc before Claude starts** hands the message back into Claude's box. In the terminal that's
+  what you want; in the chat it's invisible, and the next message you send is *appended* to it.
+- **Typing in the terminal view**, then switching to the chat.
+
+`TmuxModel.noticeLeftoverInput` reads the box every poll (`typedInput` — the `❯` line plus the
+wrapped lines under it, non-dim text only) and publishes anything that isn't one of the app's own
+in-flight sends. `ComposeBar.adopt` then moves it into the message box and clears Claude's with
+**Ctrl-U** (tested: Esc leaves the text in place, and a second Ctrl-C quits). If the message box
+already has text, a banner offers to add or discard instead of clobbering. Nothing is pulled while
+the raw terminal view is showing that window — there, Claude's box *is* the box.
+
+**Dim text in the box is queued, not typed.** While Claude is busy it shows what you type dimmed,
+to be sent when the turn ends; pulling that would stop it being sent. That's why the reader ignores
+dim text — the placeholder and the suggestion are dim too.
+
+## A "busy" record can be a lie
+
+Claude rewrites `~/.claude/sessions/<pid>.json` every few seconds while it works. One was found
+saying `busy` with an `updatedAt` **five days old**, over a screen reading `· done 1:42 PM`: the
+process had hung with text queued. `claudeState` now treats a `busy` older than three minutes with
+no "esc to interrupt" on screen as ready. The process is still hung — the app can't fix that — but
+it no longer shows a spinner for it.

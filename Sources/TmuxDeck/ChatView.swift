@@ -37,7 +37,10 @@ struct ChatView: View {
             if store.searching { searchBar }
             ScrollViewReader { proxy in
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 0) {
+                // Not lazy: only the last 25 turns render anyway, and a lazy stack whose rows
+                // measure after the fact is what left a bottom-anchored scroll view showing
+                // nothing until the view was rebuilt.
+                VStack(alignment: .leading, spacing: 0) {
                     let all = turns
                     if all.count > visibleTurns && !store.searching {
                         Button {

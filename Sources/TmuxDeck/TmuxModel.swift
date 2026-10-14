@@ -128,6 +128,11 @@ struct ClaudeSessionInfo: Hashable {
     var name: String?
     var status: String?        // "busy" while working, "idle", "shell" (idle with a background shell)…
     var waitingFor: String?    // set when Claude is waiting on you
+    /// When Claude last wrote the record (ms since 1970). It writes every few seconds while
+    /// working, so a "busy" that's minutes old is a record Claude stopped updating, not work.
+    var updatedAt: Double = 0
+
+    var recordAge: TimeInterval { Date().timeIntervalSince1970 - updatedAt / 1000 }
 }
 
 /// Claude's live status line from its screen, e.g. "Thinking… (1m 3s · ↓ 2.3k tokens)",
@@ -189,6 +194,10 @@ final class TmuxModel: ObservableObject, Identifiable {
     @Published var titles: [String: String] = [:]
     /// Windows the person switched to the raw terminal view.
     @Published var rawTerminal: Set<String> = []
+    /// Text sitting in a Claude window's input box that didn't come from the app — what Claude
+    /// hands back when you press Esc, or something typed in the terminal view. The message box
+    /// adopts it, so there's one place your unsent text lives rather than two that disagree.
+    @Published private(set) var leftoverInput: [String: String] = [:]
     /// The host answered, but there's no tmux server running on it.
     @Published private(set) var noTmuxServer = false
     /// Tools this server is missing. python3 is the one that matters: without it there's no
@@ -514,7 +523,8 @@ for pane, pid, path in panes:
                 if let existing = claudeByPane[paneID], existing.updated > updated { continue }
                 claudeByPane[paneID] = (ClaudeSessionInfo(sessionID: sid, name: obj["name"] as? String,
                                                               status: obj["status"] as? String,
-                                                              waitingFor: obj["waitingFor"] as? String), updated)
+                                                              waitingFor: obj["waitingFor"] as? String,
+                                                              updatedAt: updated), updated)
                 currentCapture = nil
                 continue
             }
@@ -632,6 +642,7 @@ for pane, pid, path in panes:
         if newSuggestions != suggestions { suggestions = newSuggestions }
         if newActivities != activities { activities = newActivities }
         recoverStuckMessages(allItems, captures: captures)
+        noticeLeftoverInput(allItems, captures: captures)
         // Keep the last good status line for a minute when a read finds none (Claude's
         // screen mid-redraw, or a menu covering it), so the chips don't flicker away.
         let now = Date()
@@ -683,15 +694,44 @@ for pane, pid, path in panes:
             || info?.waitingFor != nil || info?.status == "waiting" || info?.status == "blocked" {
             return .claudeNeedsYou
         }
-        if let status = info?.status {
-            return ["busy", "running", "working", "compacting"].contains(status) ? .claudeWorking : .claudeReady
+        let onScreenWorking = text.contains("esc to interrupt")
+        if let info, let status = info.status {
+            let busy = ["busy", "running", "working", "compacting"].contains(status)
+            // Claude rewrites its record every few seconds while it works. A "busy" that is
+            // minutes old with no "esc to interrupt" on screen is a record it stopped updating
+            // — one sat that way for five days, showing a spinner over a finished reply.
+            if busy && !onScreenWorking && info.updatedAt > 0 && info.recordAge > 180 {
+                return .claudeReady
+            }
+            return busy ? .claudeWorking : .claudeReady
         }
-        return text.contains("esc to interrupt") ? .claudeWorking : .claudeReady
+        return onScreenWorking ? .claudeWorking : .claudeReady
     }
 
     /// If a message you sent is still sitting in Claude's input box, press Enter again
     /// (up to 3 times, 4 seconds apart). If Claude's agent list has focus, Enter would
     /// go there instead, so say so rather than pressing it.
+    private func noticeLeftoverInput(_ items: [TmuxWindow], captures: [String: [String]]) {
+        var found: [String: String] = [:]
+        for w in items where w.assistant == .claude && !w.state.isRunningProgram {
+            let typed = Self.typedInput(captures[w.paneID] ?? [])
+            guard !typed.isEmpty else { continue }
+            // Not while one of our own messages is on its way through that box.
+            if let sid = w.claude?.sessionID, let store = chatStores[sid],
+               store.sending.contains(where: { Self.input(typed, holds: $0.text) }) { continue }
+            found[w.id] = typed
+        }
+        if found != leftoverInput { leftoverInput = found }
+    }
+
+    /// Empties Claude's input box (Ctrl-U; Esc leaves the text, Ctrl-C twice would quit).
+    func clearInput(_ w: TmuxWindow) {
+        leftoverInput[w.id] = nil
+        Task {
+            _ = await remote.run("tmux send-keys -t \(sq(target(w))) C-u")
+        }
+    }
+
     private func recoverStuckMessages(_ items: [TmuxWindow], captures: [String: [String]]) {
         var reasons: [UUID: String] = [:]
         for w in items where w.state.isClaude {
@@ -727,11 +767,29 @@ for pane, pid, path in panes:
     }
 
     /// What's typed (not Claude's dim suggestion) in Claude's input box.
+    /// What's typed in Claude's input box: the `❯` line and the lines under it up to the box's
+    /// bottom rule, without the dim text (the placeholder and the suggestion are dim, typed text
+    /// isn't). A long message Claude hands back after Esc wraps over several lines, so stopping
+    /// at the first line would lose most of it.
     static func typedInput(_ rawLines: [String]) -> String {
-        guard let line = rawLines.last(where: { stripANSI($0).trimmingCharacters(in: .whitespaces).hasPrefix("❯") }),
-              let prompt = line.range(of: "❯") else { return "" }
+        guard let start = rawLines.lastIndex(where: { stripANSI($0).trimmingCharacters(in: .whitespaces).hasPrefix("❯") })
+        else { return "" }
+        var lines: [String] = []
+        for (n, raw) in rawLines[start...].enumerated() {
+            let plain = stripANSI(raw).trimmingCharacters(in: .whitespaces)
+            if n > 0 && (plain.hasPrefix("─") || plain.isEmpty) { break }
+            lines.append(brightText(raw, after: n == 0 ? "❯" : nil))
+        }
+        return lines.joined(separator: "\n")
+            .replacingOccurrences(of: "\u{a0}", with: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// The non-dim text of one screen line, optionally only after a marker character.
+    private static func brightText(_ line: String, after marker: Character?) -> String {
+        var i = line.startIndex
+        if let marker, let m = line.firstIndex(of: marker) { i = line.index(after: m) }
         var dim = false, text = ""
-        var i = prompt.upperBound
         while i < line.endIndex {
             if line[i] == "\u{1b}", let end = line[i...].firstIndex(where: { $0.isLetter }) {
                 if line[end] == "m" {
@@ -745,7 +803,7 @@ for pane, pid, path in panes:
             if !dim { text.append(line[i]) }
             i = line.index(after: i)
         }
-        return text.replacingOccurrences(of: "\u{a0}", with: " ").trimmingCharacters(in: .whitespaces)
+        return text.trimmingCharacters(in: .whitespaces)
     }
 
     /// Claude shows its agent list ("● main", "◯ general-purpose …") under the status line when it has focus.
@@ -1598,6 +1656,12 @@ for pane, pid, path in panes:
             _ = await remote.run(script)
             try? await Task.sleep(for: .milliseconds(300))
             await refresh()
+            // Esc makes Claude hand back the message it hadn't started on; that takes a moment
+            // to draw, and the message box wants it as soon as it's there.
+            if keys.contains("Escape") {
+                try? await Task.sleep(for: .milliseconds(700))
+                await refresh()
+            }
         }
     }
 

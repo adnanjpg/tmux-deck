@@ -18,6 +18,8 @@ struct ComposeBar: View {
     @State private var caret = 0
     @State private var chosen = 0
     @State private var listDismissed = false
+    /// Text found in Claude's own box while this box already had something in it.
+    @State private var leftover: String?
 
     /// A pasted or dropped image, uploaded to the work machine as soon as it's added.
     struct Attachment: Identifiable {
@@ -37,6 +39,7 @@ struct ComposeBar: View {
                 }
             }
             if !attachments.isEmpty { attachmentStrip }
+            if let leftover { leftoverBanner(leftover) }
             if !completions.isEmpty {
                 CompletionList(items: completions, selected: chosen, onPick: accept)
             }
@@ -113,11 +116,55 @@ struct ComposeBar: View {
             model.drafts[window.id] = new
             chosen = 0
         }
-        .onAppear { catalog?.loadIfNeeded() }
+        .onAppear { catalog?.loadIfNeeded(); adopt(model.leftoverInput[window.id]) }
+        .onChange(of: model.leftoverInput[window.id]) { _, found in adopt(found) }
         .onChange(of: pathQuery) { _, q in if let q { files.search(q) } }
     }
 
     private var suggestion: String? { model.suggestions[window.id] }
+
+    // MARK: One input box, not two
+
+    /// Claude's input box and this one must not disagree. When Claude hands a message back
+    /// (Esc before it started), or something was typed in the terminal view, that text is
+    /// moved here and cleared over there — otherwise the next thing you send gets appended to
+    /// it, invisibly, in Claude's box. If this box already has text, you're asked instead.
+    private func adopt(_ found: String?) {
+        guard let found, !found.isEmpty else { leftover = nil; return }
+        // The terminal view shows Claude's box itself; leave it alone while that's on screen.
+        guard !model.rawTerminal.contains(window.id) else { return }
+        if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            text = found
+            model.clearInput(window)
+            focusToken += 1
+            DispatchQueue.main.async { caret = text.count }
+        } else if !text.contains(found) {
+            leftover = found
+        }
+    }
+
+    private func leftoverBanner(_ found: String) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Image(systemName: "arrow.uturn.backward").foregroundStyle(.orange)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Claude's input box has text you didn't send from here").font(fonts.caption.weight(.semibold))
+                Text(found).font(fonts.caption).foregroundStyle(.secondary).lineLimit(2)
+            }
+            Spacer(minLength: 4)
+            Button("Add it here") {
+                text = found + "\n" + text
+                model.clearInput(window)
+                leftover = nil
+            }
+            Button("Discard") {
+                model.clearInput(window)
+                leftover = nil
+            }
+        }
+        .controlSize(.small)
+        .padding(10)
+        .background(Color.orange.opacity(0.10), in: RoundedRectangle(cornerRadius: 8))
+    }
 
     // MARK: Completing a "/" command or a skill
 

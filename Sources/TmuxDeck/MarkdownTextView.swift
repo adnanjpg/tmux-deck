@@ -51,8 +51,8 @@ struct MarkdownTextView: NSViewRepresentable {
     func sizeThatFits(_ proposal: ProposedViewSize, nsView: SelectableTextView, context: Context) -> CGSize? {
         var width = proposal.width ?? nsView.bounds.width
         if width <= 0 || !width.isFinite { width = nsView.lastWidth }
-        guard width > 0, width.isFinite,
-              let container = nsView.textContainer, let layout = nsView.layoutManager else { return nil }
+        guard let container = nsView.textContainer, let layout = nsView.layoutManager else { return nil }
+        if width <= 0 || !width.isFinite { width = 600 }
         nsView.lastWidth = width
         if abs(container.size.width - width) > 0.5 {
             container.size = NSSize(width: width, height: CGFloat.greatestFiniteMagnitude)
