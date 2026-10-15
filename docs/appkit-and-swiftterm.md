@@ -139,6 +139,24 @@ Notes for anyone touching it:
 - Anything interactive — the PR chips — can't live inside the text, so it stays a SwiftUI view
   underneath.
 
+## Chat rendering cost
+
+The chat re-renders on every transcript poll and on every tmux refresh (`ChatView` reads
+`TmuxModel` from the environment), so anything done per render is done once a second for
+every visible message. Things that keep scrolling smooth:
+
+- `MarkdownText.init` is a **cache lookup** (`NSCache` keyed by the message text); the parse,
+  including the PR links, runs once per distinct message. The heading regex is static — a
+  `try! Regex(...)` inside a per-line loop compiled on every line of every message.
+- `ChatStore.turns` is grouped in `items.didSet`, not in a computed property.
+- `TurnView` is `Equatable` on its `Turn` and rendered with `.equatable()`, so turns that didn't
+  change skip their body.
+- `MessageCard` takes the "copy this turn" text as a closure; building it eagerly meant joining
+  every tool result of every visible turn per render.
+- `ChatStore.poll` only assigns `stale`/`missing`/`loaded` when the value changes — assigning a
+  `@Published` the same value still fires `objectWillChange`.
+- `PRPanelForChat` scans the transcript for PR mentions in `onChange(of: store.items)`, not in `body`.
+
 ## Text size
 
 macOS SwiftUI **ignores `dynamicTypeSize`** — `.font(.body)` renders identically at `.xSmall` and

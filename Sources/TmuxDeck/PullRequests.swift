@@ -394,8 +394,14 @@ private struct PRPanelForChat: View {
     let title: String
     let repo: String?
 
+    @State private var mentions: [String] = []
+
     var body: some View {
-        PRPanel(repo: repo, mentions: PRStore.mentions(in: texts, repo: repo))
+        PRPanel(repo: repo, mentions: mentions)
+            // Scanning the whole transcript with regexes on every render is too slow to scroll
+            // through; the items array only changes when the log does.
+            .onChange(of: store.items, initial: true) { _, _ in mentions = PRStore.mentions(in: texts, repo: repo) }
+            .onChange(of: repo) { _, _ in mentions = PRStore.mentions(in: texts, repo: repo) }
     }
 
     /// What you and Claude wrote, newest first (tool output is left out: it's noisy).

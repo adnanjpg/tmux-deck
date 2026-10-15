@@ -68,7 +68,11 @@ final class ChatStore: ObservableObject {
     let assistant: CodingAssistant
     private let path: String
     var transcriptPath: String { path }
-    @Published private(set) var items: [ChatItem] = []
+    @Published private(set) var items: [ChatItem] = [] {
+        didSet { turns = Turn.group(items) }
+    }
+    /// `items` grouped into exchanges, redone when they change rather than on every render.
+    private(set) var turns: [Turn] = []
     @Published private(set) var loaded = false
     @Published private(set) var missing = false
     /// True while catching up after you open the chat.
@@ -190,12 +194,14 @@ final class ChatStore: ObservableObject {
         let result = await remote.run("python3 - \(sq(argument)) \(offset)", input: script, timeout: 30)
         guard result.ok else {
             let message = result.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
-            stale = message.contains("python3") || message.contains("not found")
+            let text = message.contains("python3") || message.contains("not found")
                 ? "Can't read the transcript: python3 isn't available on that machine."
                 : "Not updating — can't reach the transcript."
+            if stale != text { stale = text }
             return
         }
-        stale = nil
+        // Assigning a @Published the value it already has still re-renders the whole chat.
+        if stale != nil { stale = nil }
         var fresh: [ChatItem] = []
         var working = items
         var queue = queued
@@ -209,10 +215,10 @@ final class ChatStore: ObservableObject {
             case "end":
                 offset = obj["off"] as? Int ?? offset
                 if let followed = obj["sid"] as? String, followed != reading { reading = followed }
-                missing = false
+                if missing { missing = false }
             case "missing":
                 // A brand-new session has no log until its first message.
-                missing = true
+                if !missing { missing = true }
             case "reset":
                 working = []; toolIndex = [:]; queue = []
             case "q+": queue.append(text); enqueued.append(text)
@@ -279,7 +285,7 @@ final class ChatStore: ObservableObject {
             }
             if remaining != sending { sending = remaining }
         }
-        loaded = true
+        if !loaded { loaded = true }
         if offset != startOffset { save() }
     }
 

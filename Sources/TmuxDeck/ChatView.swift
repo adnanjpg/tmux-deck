@@ -53,7 +53,7 @@ struct ChatView: View {
                         .padding(.bottom, 8)
                     }
                     ForEach(store.searching ? all : Array(all.suffix(visibleTurns))) { turn in
-                        TurnView(turn: turn, store: store)
+                        TurnView(turn: turn, store: store).equatable()
                     }
                     // A finished conversation's leftover queue records are history, not a queue.
                     if window != nil {
@@ -155,7 +155,7 @@ extension ChatView {
     /// While a search is on, only the turns that match it are shown — the point is to find the
     /// exchange, and the transcript is too long to highlight in place usefully.
     private var turns: [Turn] {
-        let all = Turn.group(store.items)
+        let all = store.turns
         let query = store.search.trimmingCharacters(in: .whitespaces)
         guard store.searching, !query.isEmpty else { return all }
         return all.filter { turn in
@@ -244,7 +244,7 @@ extension ChatView {
 }
 
 /// One exchange: your message and everything Claude did in reply.
-struct Turn: Identifiable {
+struct Turn: Identifiable, Equatable {
     var user: ChatItem?
     var replies: [ChatItem] = []
 
@@ -299,17 +299,19 @@ extension ChatItem {
     }
 }
 
-struct TurnView: View {
+struct TurnView: View, Equatable {
     @Environment(\.fonts) private var fonts
     let turn: Turn
     @ObservedObject var store: ChatStore
+
+    static func == (a: TurnView, b: TurnView) -> Bool { a.turn == b.turn && a.store === b.store }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             if let user = turn.user, case .command(let cmd) = user.kind {
                 MessageCard(role: .you, collapsed: binding(user.id), summary: cmd, detail: "command",
                             copyText: cmd + (user.result.map { "\n" + $0 } ?? ""),
-                            copyTurn: turn.asText(store.assistant), copyAll: copyAll) {
+                            copyTurn: copyTurn, copyAll: copyAll) {
                     VStack(alignment: .leading, spacing: 8) {
                         Label(cmd, systemImage: cmd.hasPrefix("!") ? "terminal" : "command")
                             .font(fonts.monoBody)
@@ -330,7 +332,7 @@ struct TurnView: View {
                 MessageCard(role: .you, collapsed: binding(user.id),
                             summary: text.split(separator: "\n").first.map(String.init) ?? text,
                             detail: (user.images ?? 0) > 0 ? "\(user.images!) image\(user.images! == 1 ? "" : "s")" : "",
-                            copyText: text, copyTurn: turn.asText(store.assistant), copyAll: copyAll) {
+                            copyText: text, copyTurn: copyTurn, copyAll: copyAll) {
                     VStack(alignment: .leading, spacing: 8) {
                         if let n = user.images, n > 0 { ImageBadge(count: n) }
                         if !text.isEmpty {
@@ -347,7 +349,7 @@ struct TurnView: View {
                 MessageCard(role: .assistant(store.assistant), collapsed: binding(turn.replyID),
                             summary: summary.text, detail: summary.detail,
                             copyText: turn.replyText(store.assistant),
-                            copyTurn: turn.asText(store.assistant), copyAll: copyAll) {
+                            copyTurn: copyTurn, copyAll: copyAll) {
                     VStack(alignment: .leading, spacing: 12) {
                         ForEach(turn.replies) { ChatRow(item: $0) }
                     }
@@ -359,8 +361,10 @@ struct TurnView: View {
     }
 
     private func copyAll() -> String {
-        Turn.group(store.items).map { $0.asText(store.assistant) }.joined(separator: "\n\n---\n\n")
+        store.turns.map { $0.asText(store.assistant) }.joined(separator: "\n\n---\n\n")
     }
+
+    private func copyTurn() -> String { turn.asText(store.assistant) }
 
     private func binding(_ id: String) -> Binding<Bool> {
         Binding(get: { store.collapsed.contains(id) },
@@ -392,7 +396,7 @@ struct MessageCard<Content: View>: View {
     /// What "Copy message" copies. A menu in the header rather than a context menu over the
     /// body: a contextMenu on a container swallows the drag that starts a text selection.
     var copyText: String?
-    var copyTurn: String?
+    var copyTurn: (() -> String)?
     var copyAll: (() -> String)?
     @ViewBuilder let content: Content
 
@@ -456,7 +460,7 @@ struct MessageCard<Content: View>: View {
                 }
                 if let copyTurn {
                     Divider()
-                    Button("Copy this turn") { Clipboard.put(copyTurn) }
+                    Button("Copy this turn") { Clipboard.put(copyTurn()) }
                 }
                 if let copyAll {
                     Button("Copy the whole conversation") { Clipboard.put(copyAll()) }
@@ -855,6 +859,16 @@ struct MarkdownText: View {
     enum TableAlignment: Hashable { case leading, center, trailing }
 
     private static let separatorPattern = try! Regex(#"^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$"#)
+    private static let headingPattern = try! Regex(#"^(#{1,4})\s+(.*)$"#)
+
+    /// Parsed messages, by source text. A chat re-renders on every poll and every tmux
+    /// refresh, and parsing hundreds of messages each time is what made scrolling stutter.
+    private static let cache = NSCache<NSString, Parsed>()
+    final class Parsed {
+        let blocks: [Block]
+        let pullRequests: [String]
+        init(blocks: [Block], pullRequests: [String]) { self.blocks = blocks; self.pullRequests = pullRequests }
+    }
 
     /// "| a | b |" → ["a", "b"]; pipes inside `code` or escaped as \| are kept.
     static func cells(_ line: String) -> [String] {
@@ -874,6 +888,16 @@ struct MarkdownText: View {
     }
 
     init(_ source: String) {
+        if let hit = Self.cache.object(forKey: source as NSString) {
+            blocks = hit.blocks; pullRequests = hit.pullRequests
+            return
+        }
+        let parsed = Self.parse(source)
+        blocks = parsed.blocks; pullRequests = parsed.pullRequests
+        Self.cache.setObject(parsed, forKey: source as NSString)
+    }
+
+    static func parse(_ source: String) -> Parsed {
         var blocks: [Block] = []
         var paragraph: [String] = []
         var code: [String]?
@@ -912,7 +936,7 @@ struct MarkdownText: View {
                 i = j - 1
                 continue
             }
-            if let m = line.firstMatch(of: try! Regex(#"^(#{1,4})\s+(.*)$"#)),
+            if let m = line.firstMatch(of: headingPattern),
                let hashes = m[1].substring, let title = m[2].substring {
                 flush(); blocks.append(.heading(String(title), hashes.count)); continue
             }
@@ -920,7 +944,13 @@ struct MarkdownText: View {
         }
         if let c = code { blocks.append(.code(c.joined(separator: "\n"))) }
         flush()
-        self.blocks = blocks
+        var seen = Set<String>()
+        var found: [String] = []
+        for block in blocks {
+            guard case .text(let s) = block else { continue }
+            for url in prURLs(in: s) where seen.insert(url).inserted { found.append(url) }
+        }
+        return Parsed(blocks: blocks, pullRequests: found)
     }
 
     var body: some View {
@@ -940,15 +970,7 @@ struct MarkdownText: View {
     }
 
     /// Every PR link in the message, in order, without repeats.
-    private var pullRequests: [String] {
-        var seen = Set<String>()
-        var found: [String] = []
-        for block in blocks {
-            guard case .text(let s) = block else { continue }
-            for url in Self.prURLs(in: s) where seen.insert(url).inserted { found.append(url) }
-        }
-        return found
-    }
+    let pullRequests: [String]
 
     /// Distinct GitHub PR links in a paragraph, in order.
     static func prURLs(in s: String) -> [String] {
