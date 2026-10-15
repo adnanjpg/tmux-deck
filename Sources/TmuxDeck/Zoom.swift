@@ -57,12 +57,19 @@ struct AppFont {
     var caption2: Font { .system(size: points(9)) }
     var headline: Font { .system(size: points(13), weight: .semibold) }
     var title3: Font { .system(size: points(15), weight: .semibold) }
+    var title2: Font { .system(size: points(17)) }
+
+    /// A one-off size (icons, badges) that still follows the zoom.
+    func size(_ standard: CGFloat, weight: Font.Weight = .regular, design: Font.Design = .default) -> Font {
+        .system(size: points(standard), weight: weight, design: design)
+    }
 
     var mono: Font { .system(size: points(12), design: .monospaced) }
     var monoBody: Font { .system(size: points(13), design: .monospaced) }
     var monoCaption: Font { .system(size: points(10), design: .monospaced) }
 
     var nsMono: NSFont { .monospacedSystemFont(ofSize: points(12), weight: .regular) }
+    var nsBody: NSFont { .systemFont(ofSize: points(13)) }
     var terminal: NSFont { .monospacedSystemFont(ofSize: base, weight: .regular) }
 }
 

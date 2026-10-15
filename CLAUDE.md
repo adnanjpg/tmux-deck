@@ -68,7 +68,7 @@ into split-view tiles on demand.
 | Status bar | `StatusBar.swift`, `StatusLineEditor.swift` | Claude's status line as native chips |
 | Task switcher | `TabSwitcher.swift`, `AnsiThumbnail.swift` | ⌃⇥ HUD with rendered screen thumbnails |
 | Themes | `Themes.swift` | Reads VS Code themes, applies them everywhere |
-| Text size | `Zoom.swift` | ⌘+/⌘−/⌘0; `AppFont` in the environment, since macOS ignores dynamic type |
+| Text size | `Zoom.swift` | ⌘+/⌘−/⌘0 zoom the whole window; `AppFont` in the environment, since macOS ignores dynamic type; never `.font(.caption)` |
 | Files | `Files.swift`, `FileViews.swift` | Remote file tree and editor; digest-checked saves |
 | Diffs | `Diffs.swift`, `DiffView.swift` | A worktree against its base branch |
 | History | `History.swift`, `HistoryView.swift` | Finished conversations, read-only |

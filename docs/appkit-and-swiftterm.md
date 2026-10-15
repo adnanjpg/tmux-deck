@@ -146,5 +146,17 @@ macOS SwiftUI **ignores `dynamicTypeSize`** — `.font(.body)` renders identical
 `AppFont` derives every size from it; views read `\.fonts` from the environment instead of naming
 `.body`/`.caption`. Terminals get `AppFont.terminal` and re-apply on `.fontSizeChanged`.
 
-If you add a view with text in the chat, console or status bar, take its font from `\.fonts` or it
-won't zoom.
+Zoom covers the **whole window**, not just the chat:
+
+- `RootView` (and the Settings scene) set `.environment(\.fonts, zoom.font)` **and** `.font(zoom.font.body)`,
+  so a `Text` with no style of its own follows the zoom too. Sidebar rows, buttons, badges, the
+  status bar, files, diffs, PR cards, the tab switcher and the shortcuts sheet all scale.
+- Never write `.font(.caption)` / `.font(.system(size: 11))`. Use `fonts.caption`, or `fonts.size(11)`
+  for a one-off (it keeps the 13pt-relative ratio). The build has no `.font(.` left outside `Zoom.swift`.
+- AppKit text views take an `NSFont` from `AppFont` (`nsBody` for the compose box, `nsMono` for the
+  console) and compare it in `updateNSView`, which is how they pick up a change without a notification.
+- Toolbar items are AppKit's and stay at the system size; `AnsiThumbnail` keeps its own 9pt because
+  the thumbnail is scaled to fit anyway.
+
+If you add a view that uses `fonts.` it needs `@Environment(\.fonts) private var fonts` — in the
+struct, not an extension (property wrappers can't live in extensions).

@@ -509,7 +509,7 @@ struct UsageDetails: View {
             Divider()
             if let full {
                 ScrollView {
-                    Text(full).font(.system(size: 11, design: .monospaced)).textSelection(.enabled)
+                    Text(full).font(fonts.size(11, design: .monospaced)).textSelection(.enabled)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 .frame(maxHeight: 260)
@@ -603,7 +603,7 @@ struct BackgroundShells: View {
             ForEach(Array(shells)) { item in
                 if case .tool(_, let summary, _, _) = item.kind {
                     VStack(alignment: .leading, spacing: 3) {
-                        Text(summary).font(.system(size: 11, design: .monospaced)).lineLimit(3).textSelection(.enabled)
+                        Text(summary).font(fonts.size(11, design: .monospaced)).lineLimit(3).textSelection(.enabled)
                         if let r = item.result {
                             Text(r.split(separator: "\n").prefix(2).joined(separator: " ")).font(fonts.caption).foregroundStyle(.secondary).lineLimit(2)
                         }
@@ -613,7 +613,7 @@ struct BackgroundShells: View {
             }
             if let tasks {
                 ScrollView {
-                    Text(tasks).font(.system(size: 11, design: .monospaced)).textSelection(.enabled)
+                    Text(tasks).font(fonts.size(11, design: .monospaced)).textSelection(.enabled)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 .frame(maxHeight: 220)

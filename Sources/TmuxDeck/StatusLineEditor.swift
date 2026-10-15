@@ -3,6 +3,7 @@ import SwiftUI
 /// Edits Claude Code's status line on the server: the `statusLine.command` in
 /// ~/.claude/settings.json and, when that command runs a script, the script itself.
 struct StatusLineEditor: View {
+    @Environment(\.fonts) private var fonts
     let window: TmuxWindow
     @EnvironmentObject private var model: TmuxModel
     @Environment(\.dismiss) private var dismiss
@@ -20,9 +21,9 @@ struct StatusLineEditor: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text("Claude's status line").font(.title3.weight(.semibold))
+            Text("Claude's status line").font(fonts.title3.weight(.semibold))
             Text("Claude Code runs this command after each message and shows what it prints under the input box. It receives the session's details (model, folder, cost, context) as JSON on stdin.")
-                .font(.callout)
+                .font(fonts.callout)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
 
@@ -30,19 +31,19 @@ struct StatusLineEditor: View {
                 ProgressView("Reading settings from \(model.displayName)…").frame(maxWidth: .infinity, minHeight: 200)
             } else {
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("Command").font(.headline)
+                    Text("Command").font(fonts.headline)
                     TextField("bash ~/.claude/statusline.sh", text: $command)
-                        .font(.system(.body, design: .monospaced))
+                        .font(fonts.monoBody)
                         .textFieldStyle(.roundedBorder)
                 }
                 if let scriptPath {
                     VStack(alignment: .leading, spacing: 6) {
                         HStack {
-                            Text("Script").font(.headline)
-                            Text(scriptPath).font(.caption.monospaced()).foregroundStyle(.secondary).textSelection(.enabled)
+                            Text("Script").font(fonts.headline)
+                            Text(scriptPath).font(fonts.caption.monospaced()).foregroundStyle(.secondary).textSelection(.enabled)
                         }
                         TextEditor(text: $script)
-                            .font(.system(size: 12, design: .monospaced))
+                            .font(fonts.size(12, design: .monospaced))
                             .autocorrectionDisabled()
                             .scrollContentBackground(.hidden)
                             .padding(6)
@@ -54,11 +55,11 @@ struct StatusLineEditor: View {
                 if let testOutput {
                     VStack(alignment: .leading, spacing: 6) {
                         HStack {
-                            Text("Test output").font(.headline)
-                            Text("with sample values for context and usage").font(.caption).foregroundStyle(.secondary)
+                            Text("Test output").font(fonts.headline)
+                            Text("with sample values for context and usage").font(fonts.caption).foregroundStyle(.secondary)
                         }
                         Text(testOutput.isEmpty ? "(printed nothing)" : testOutput)
-                            .font(.system(size: 12, design: .monospaced))
+                            .font(fonts.size(12, design: .monospaced))
                             .textSelection(.enabled)
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .padding(8)
@@ -67,7 +68,7 @@ struct StatusLineEditor: View {
                 }
             }
             if let error {
-                Text(error).font(.callout).foregroundStyle(.red).fixedSize(horizontal: false, vertical: true)
+                Text(error).font(fonts.callout).foregroundStyle(.red).fixedSize(horizontal: false, vertical: true)
             }
             HStack {
                 Button("Test", action: test)
@@ -82,7 +83,7 @@ struct StatusLineEditor: View {
                     .disabled(loading || saving || !changed)
             }
             Text("Saving keeps a backup of the old version next to it (.bak-tmuxdeck).")
-                .font(.caption).foregroundStyle(.tertiary)
+                .font(fonts.caption).foregroundStyle(.tertiary)
         }
         .padding(20)
         .frame(width: 640)

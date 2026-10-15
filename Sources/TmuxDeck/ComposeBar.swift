@@ -73,7 +73,7 @@ struct ComposeBar: View {
                                     onCompletionMove: move,
                                     onCompletionAccept: acceptChosen,
                                     onCaretMoved: { caret = $0; listDismissed = false })
-                        .frame(height: min(max(height, 22), 160))
+                        .frame(height: min(max(height, fonts.points(22)), fonts.points(160)))
                 }
                 .padding(.horizontal, 10)
                 .padding(.vertical, 8)
@@ -366,6 +366,7 @@ struct ComposeBar: View {
 }
 
 struct ComposeTextView: NSViewRepresentable {
+    @Environment(\.fonts) private var fonts
     @Binding var text: String
     @Binding var height: CGFloat
     var focusToken: Int
@@ -394,7 +395,7 @@ struct ComposeTextView: NSViewRepresentable {
         tv.isRichText = false
         tv.allowsUndo = true
         tv.drawsBackground = false
-        tv.font = .systemFont(ofSize: 13)
+        tv.font = fonts.nsBody
         tv.textContainerInset = .zero
         tv.textContainer?.lineFragmentPadding = 5
         tv.isAutomaticQuoteSubstitutionEnabled = false
@@ -420,6 +421,10 @@ struct ComposeTextView: NSViewRepresentable {
         guard let tv = scroll.documentView as? ComposeNSTextView else { return }
         tv.hasSuggestion = suggestion != nil
         tv.completing = completing
+        if tv.font != fonts.nsBody {
+            tv.font = fonts.nsBody
+            context.coordinator.updateHeight(tv)
+        }
         if tv.string != text {
             tv.string = text
             context.coordinator.updateHeight(tv)
@@ -597,7 +602,7 @@ struct QuestionCard: View {
                 Spacer()
             }
             Text(q.question)
-                .font(.body.weight(.semibold))
+                .font(fonts.body.weight(.semibold))
                 .fixedSize(horizontal: false, vertical: true)
                 .textSelection(.enabled)
             VStack(spacing: 6) {
@@ -605,7 +610,7 @@ struct QuestionCard: View {
                     let k = key(for: option.label, fallback: n + 1)
                     Button { model.send(keys: [k], to: window, literal: true) } label: {
                         HStack(alignment: .top, spacing: 10) {
-                            Text(k).font(.caption.monospacedDigit().weight(.semibold))
+                            Text(k).font(fonts.caption.monospacedDigit().weight(.semibold))
                                 .frame(width: 20, height: 20)
                                 .background(Circle().fill(Color.accentColor.opacity(0.15)))
                             VStack(alignment: .leading, spacing: 2) {

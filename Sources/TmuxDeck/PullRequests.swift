@@ -280,31 +280,32 @@ struct ChecksSummary: View {
 
 /// Everything about a PR at a glance, for the hover card.
 struct PRCard: View {
+    @Environment(\.fonts) private var fonts
     let pr: PRInfo
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 6) {
-                Text(verbatim: "#\(pr.number)").font(.headline.monospacedDigit())
+                Text(verbatim: "#\(pr.number)").font(fonts.headline.monospacedDigit())
                 Text(pr.shortRepo).foregroundStyle(.secondary)
-                if pr.isDraft { Text("Draft").font(.caption).padding(.horizontal, 6).background(Capsule().fill(.quaternary)) }
+                if pr.isDraft { Text("Draft").font(fonts.caption).padding(.horizontal, 6).background(Capsule().fill(.quaternary)) }
                 Spacer()
-                if let d = pr.updatedAt { Text(d, style: .relative).font(.caption).foregroundStyle(.tertiary) + Text(" ago").font(.caption).foregroundStyle(.tertiary) }
+                if let d = pr.updatedAt { Text(d, style: .relative).font(fonts.caption).foregroundStyle(.tertiary) + Text(" ago").font(fonts.caption).foregroundStyle(.tertiary) }
             }
-            Text(pr.title).font(.body.weight(.medium)).fixedSize(horizontal: false, vertical: true)
+            Text(pr.title).font(fonts.body.weight(.medium)).fixedSize(horizontal: false, vertical: true)
             Divider()
             VStack(alignment: .leading, spacing: 6) {
                 ReviewBadge(pr: pr)
                 if !pr.approvedBy.isEmpty {
-                    Text("Approved by " + pr.approvedBy.joined(separator: ", ")).font(.caption).foregroundStyle(.secondary)
+                    Text("Approved by " + pr.approvedBy.joined(separator: ", ")).font(fonts.caption).foregroundStyle(.secondary)
                 }
                 if !pr.changesRequestedBy.isEmpty {
-                    Text("Changes requested by " + pr.changesRequestedBy.joined(separator: ", ")).font(.caption).foregroundStyle(.secondary)
+                    Text("Changes requested by " + pr.changesRequestedBy.joined(separator: ", ")).font(fonts.caption).foregroundStyle(.secondary)
                 }
                 ChecksSummary(pr: pr)
                 if !pr.failedChecks.isEmpty {
                     Text("Failing: " + pr.failedChecks.prefix(4).joined(separator: ", ") + (pr.failedChecks.count > 4 ? "…" : ""))
-                        .font(.caption).foregroundStyle(.red).fixedSize(horizontal: false, vertical: true)
+                        .font(fonts.caption).foregroundStyle(.red).fixedSize(horizontal: false, vertical: true)
                 }
             }
         }
@@ -317,6 +318,7 @@ struct PRCard: View {
 
 /// A PR link as a live chip: number, title and status. Hover for the full card, click to open.
 struct PRChip: View {
+    @Environment(\.fonts) private var fonts
     let url: String
     @ObservedObject private var store = PRStore.shared
     @State private var hovering = false
@@ -338,7 +340,7 @@ struct PRChip: View {
                     ProgressView().controlSize(.mini)
                 }
             }
-            .font(.callout)
+            .font(fonts.callout)
             .padding(.horizontal, 10).padding(.vertical, 5)
             .background(Capsule().fill(hovering ? Color.accentColor.opacity(0.14) : Color.secondary.opacity(0.09)))
         }
@@ -410,6 +412,7 @@ private struct PRPanelForChat: View {
 }
 
 struct PRPanel: View {
+    @Environment(\.fonts) private var fonts
     let repo: String?
     let mentions: [String]
     @ObservedObject private var store = PRStore.shared
@@ -418,10 +421,10 @@ struct PRPanel: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack {
-                Text("Pull requests").font(.headline)
+                Text("Pull requests").font(fonts.headline)
                 Spacer()
                 if let t = store.listUpdated {
-                    Text(t, style: .time).font(.caption).foregroundStyle(.tertiary)
+                    Text(t, style: .time).font(fonts.caption).foregroundStyle(.tertiary)
                 }
                 Button { Task { await store.refreshList() } } label: {
                     if store.loadingList { ProgressView().controlSize(.small) } else { Image(systemName: "arrow.clockwise") }
@@ -444,7 +447,7 @@ struct PRPanel: View {
             }
             Divider().padding(.top, 10)
             List {
-                if let e = store.error { Text(e).font(.caption).foregroundStyle(.red) }
+                if let e = store.error { Text(e).font(fonts.caption).foregroundStyle(.red) }
                 if !mentioned.isEmpty {
                     Section("In this chat") {
                         ForEach(mentioned) { PRRow(pr: $0, highlighted: true) }
@@ -497,6 +500,7 @@ struct PRPanel: View {
 }
 
 private struct PRRow: View {
+    @Environment(\.fonts) private var fonts
     let pr: PRInfo
     var highlighted = false
 
@@ -505,8 +509,8 @@ private struct PRRow: View {
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 6) {
                     Text(verbatim: "#\(pr.number)").fontWeight(.semibold).monospacedDigit()
-                    Text(pr.shortRepo).font(.caption).foregroundStyle(.secondary).lineLimit(1)
-                    if pr.isDraft { Text("Draft").font(.caption2).padding(.horizontal, 5).background(Capsule().fill(.quaternary)) }
+                    Text(pr.shortRepo).font(fonts.caption).foregroundStyle(.secondary).lineLimit(1)
+                    if pr.isDraft { Text("Draft").font(fonts.caption2).padding(.horizontal, 5).background(Capsule().fill(.quaternary)) }
                     Spacer()
                 }
                 Text(pr.title).lineLimit(2).fixedSize(horizontal: false, vertical: true)
@@ -514,7 +518,7 @@ private struct PRRow: View {
                     ReviewBadge(pr: pr)
                     ChecksSummary(pr: pr, compact: true)
                 }
-                .font(.caption)
+                .font(fonts.caption)
             }
             .padding(.vertical, 4)
             .padding(.horizontal, highlighted ? 8 : 0)

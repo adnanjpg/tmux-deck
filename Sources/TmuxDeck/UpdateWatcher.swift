@@ -47,6 +47,7 @@ final class UpdateWatcher: ObservableObject {
 
 /// A slim banner offering to relaunch into the newer build.
 struct UpdateBanner: View {
+    @Environment(\.fonts) private var fonts
     @ObservedObject private var watcher = UpdateWatcher.shared
 
     var body: some View {
@@ -62,7 +63,7 @@ struct UpdateBanner: View {
                     .buttonStyle(.plain)
                     .foregroundStyle(.secondary)
             }
-            .font(.callout)
+            .font(fonts.callout)
             .padding(.horizontal, 14)
             .padding(.vertical, 8)
             .background(Color.orange.opacity(0.15))

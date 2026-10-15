@@ -478,7 +478,7 @@ struct MessageCard<Content: View>: View {
         ZStack {
             Circle().fill(role.isYou ? theme.tint : Color.orange.opacity(0.85))
             Image(systemName: role.glyph)
-                .font(.system(size: 11, weight: .semibold))
+                .font(fonts.size(11, weight: .semibold))
                 .foregroundStyle(.white)
         }
         .frame(width: 22, height: 22)
@@ -502,7 +502,7 @@ struct SendingMessage: View {
                 HStack(spacing: 8) {
                     ZStack {
                         Circle().fill(Color.secondary.opacity(0.35))
-                        Image(systemName: "person.fill").font(.system(size: 11, weight: .semibold)).foregroundStyle(.white)
+                        Image(systemName: "person.fill").font(fonts.size(11, weight: .semibold)).foregroundStyle(.white)
                     }
                     .frame(width: 22, height: 22)
                     Text("You").fontWeight(.semibold).foregroundStyle(.secondary)
@@ -993,6 +993,7 @@ struct CopyItems: View {
 
 /// A copy button that says it worked, for code blocks and tool output.
 struct CopyButton: View {
+    @Environment(\.fonts) private var fonts
     let text: String
     @State private var copied = false
     @State private var hovering = false
@@ -1007,7 +1008,7 @@ struct CopyButton: View {
             }
         } label: {
             Image(systemName: copied ? "checkmark" : "doc.on.doc")
-                .font(.system(size: 10, weight: .semibold))
+                .font(fonts.size(10, weight: .semibold))
                 .padding(5)
                 .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 5))
         }

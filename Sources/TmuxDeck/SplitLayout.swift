@@ -451,6 +451,7 @@ private struct DividerHandle: View {
 
 /// A tile: its title bar (when split), the window, focus ring and drop zones.
 private struct TileContainer<Content: View>: View {
+    @Environment(\.fonts) private var fonts
     @Environment(\.theme) private var theme
     @ObservedObject var layout: LayoutModel
     @EnvironmentObject private var app: AppModel
@@ -486,7 +487,7 @@ private struct TileContainer<Content: View>: View {
                     .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Color.accentColor, lineWidth: 2))
                     .overlay {
                         Label(zone.label, systemImage: icon(zone))
-                            .font(.callout.weight(.semibold))
+                            .font(fonts.callout.weight(.semibold))
                             .padding(.horizontal, 12).padding(.vertical, 6)
                             .background(.regularMaterial, in: Capsule())
                     }
@@ -515,6 +516,7 @@ private struct TileContainer<Content: View>: View {
 }
 
 private struct TileHeader: View {
+    @Environment(\.fonts) private var fonts
     @Environment(\.theme) private var theme
     @ObservedObject var layout: LayoutModel
     @EnvironmentObject private var app: AppModel
@@ -527,39 +529,39 @@ private struct TileHeader: View {
         let plainTerm = tag.flatMap { PlainTerminalStore.shared.terminal(forTag: $0) }
         HStack(spacing: 6) {
             Image(systemName: "line.3.horizontal")
-                .font(.caption)
+                .font(fonts.caption)
                 .foregroundStyle(.tertiary)
                 .help("Drag to move this tile")
             if let past = tag.flatMap(PastTile.resolve) {
                 Text((past.path as NSString).lastPathComponent.hasPrefix("rollout-")
                      ? "Past Codex conversation" : "Past conversation")
-                    .font(.callout.weight(focused ? .semibold : .regular)).lineLimit(1)
+                    .font(fonts.callout.weight(focused ? .semibold : .regular)).lineLimit(1)
                 Text(past.host == Remote.localHost ? "This Mac" : past.host)
-                    .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                    .font(fonts.caption).foregroundStyle(.secondary).lineLimit(1)
             } else if let diff = tag.flatMap(DiffTile.resolve) {
-                Text("Changes").font(.callout.weight(focused ? .semibold : .regular)).lineLimit(1)
+                Text("Changes").font(fonts.callout.weight(focused ? .semibold : .regular)).lineLimit(1)
                 Text((diff.path as NSString).lastPathComponent)
-                    .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                    .font(fonts.caption).foregroundStyle(.secondary).lineLimit(1)
             } else if let file = tag.flatMap(FileTile.resolve) {
                 Text((file.path as NSString).lastPathComponent)
-                    .font(.callout.weight(focused ? .semibold : .regular)).lineLimit(1)
+                    .font(fonts.callout.weight(focused ? .semibold : .regular)).lineLimit(1)
                 Text(file.host == Remote.localHost ? "This Mac" : file.host)
-                    .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                    .font(fonts.caption).foregroundStyle(.secondary).lineLimit(1)
             } else if let t = plainTerm {
-                Text(t.title).font(.callout.weight(focused ? .semibold : .regular)).lineLimit(1)
+                Text(t.title).font(fonts.callout.weight(focused ? .semibold : .regular)).lineLimit(1)
                 Text(t.isLocal ? "This Mac" : "\(t.host) · no tmux")
-                    .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                    .font(fonts.caption).foregroundStyle(.secondary).lineLimit(1)
             } else if let (server, window) = resolved {
                 Text(server.displayTitle(window))
-                    .font(.callout.weight(focused ? .semibold : .regular))
+                    .font(fonts.callout.weight(focused ? .semibold : .regular))
                     .lineLimit(1)
                 Text(app.servers.count > 1 ? "\(server.displayName) · \(window.session)" : window.session)
-                    .font(.caption)
+                    .font(fonts.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                 StateBadge(state: window.state, done: server.unseenDone.contains(window.id))
             } else {
-                Text(tag == nil ? "Empty" : "Window closed").font(.callout).foregroundStyle(.secondary)
+                Text(tag == nil ? "Empty" : "Window closed").font(fonts.callout).foregroundStyle(.secondary)
             }
             Spacer(minLength: 4)
             Button { layout.maximize(leafID) } label: { Image(systemName: "arrow.up.left.and.arrow.down.right") }
@@ -569,7 +571,7 @@ private struct TileHeader: View {
                 .buttonStyle(.borderless)
                 .help("Close this tile")
         }
-        .font(.callout)
+        .font(fonts.callout)
         .padding(.horizontal, 10)
         .frame(height: 30)
         .background(focused ? theme.tint.opacity(0.08) : theme.panel)

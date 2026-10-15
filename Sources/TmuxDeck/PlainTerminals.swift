@@ -520,6 +520,7 @@ private struct PlainTerminalHost: NSViewRepresentable {
 
 /// A plain terminal's row in the sidebar.
 struct PlainTerminalRow: View {
+    @Environment(\.fonts) private var fonts
     private var subtitle: String {
         var parts: [String] = []
         parts.append(terminal.running
@@ -548,7 +549,7 @@ struct PlainTerminalRow: View {
             VStack(alignment: .leading, spacing: 1) {
                 Text(terminal.title).lineLimit(1)
                 Text(subtitle)
-                    .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                    .font(fonts.caption).foregroundStyle(.secondary).lineLimit(1)
             }
         }
         .padding(.vertical, 2)

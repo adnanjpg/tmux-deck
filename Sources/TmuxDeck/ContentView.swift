@@ -2,6 +2,7 @@ import AppKit
 import SwiftUI
 
 struct ContentView: View {
+    @Environment(\.fonts) private var fonts
     @Environment(\.theme) private var theme
     @EnvironmentObject private var model: TmuxModel
     @State private var renaming: RenameTarget?
@@ -197,7 +198,7 @@ struct ContentView: View {
                 } header: {
                     HStack {
                         Image(systemName: "laptopcomputer").foregroundStyle(.secondary)
-                        Text("This Mac · terminals").font(.headline).foregroundStyle(.primary)
+                        Text("This Mac · terminals").font(fonts.headline).foregroundStyle(.primary)
                         Spacer()
                         Menu {
                             Button("New terminal") { openPlain(.shell) }
@@ -254,16 +255,16 @@ struct ContentView: View {
         ]
         Text("Not installed on \(server.displayName): "
              + tools.map { "\($0) (\(explain[$0] ?? "missing"))" }.joined(separator: ", "))
-            .font(.caption).foregroundStyle(.orange)
+            .font(fonts.caption).foregroundStyle(.orange)
             .fixedSize(horizontal: false, vertical: true)
     }
 
     private var sidebarSearch: some View {
         HStack(spacing: 6) {
-            Image(systemName: "magnifyingglass").font(.caption).foregroundStyle(.tertiary)
+            Image(systemName: "magnifyingglass").font(fonts.caption).foregroundStyle(.tertiary)
             TextField("Filter windows", text: $sidebarFilter)
                 .textFieldStyle(.plain)
-                .font(.callout)
+                .font(fonts.callout)
                 .focused($filterFocused)
             if !sidebarFilter.isEmpty {
                 Button { sidebarFilter = "" } label: {
@@ -318,7 +319,7 @@ struct ContentView: View {
                 VStack(alignment: .leading, spacing: 6) {
                     if server.noTmuxServer {
                         Text("Connected, but tmux isn't running there yet.")
-                            .font(.caption).foregroundStyle(.secondary)
+                            .font(fonts.caption).foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                     }
                     Button("Restore previous sessions…") { restoring = server }
@@ -339,10 +340,10 @@ struct ContentView: View {
                     }
                     if let error = server.lastError {
                         Text(error)
-                            .font(.caption).foregroundStyle(.orange)
+                            .font(fonts.caption).foregroundStyle(.orange)
                             .fixedSize(horizontal: false, vertical: true)
                         Button("Try now") { server.retryNow() }
-                            .buttonStyle(.link).font(.caption)
+                            .buttonStyle(.link).font(fonts.caption)
                     }
                 }
                 .selectionDisabled()
@@ -351,7 +352,7 @@ struct ContentView: View {
         let loose = plain.terminals(on: server.host)
         if !loose.isEmpty {
             Text("not in tmux")
-                .font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                .font(fonts.caption.weight(.semibold)).foregroundStyle(.secondary)
                 .padding(.top, 6)
                 .selectionDisabled()
             ForEach(loose) { t in
@@ -370,10 +371,10 @@ struct ContentView: View {
                 } label: {
                     HStack(spacing: 5) {
                         Image(systemName: "chevron.right")
-                            .font(.system(size: 9, weight: .bold))
+                            .font(fonts.size(9, weight: .bold))
                             .rotationEffect(.degrees(open ? 90 : 0))
                             .frame(width: 10)
-                        Text(session.name).font(.caption.weight(.semibold))
+                        Text(session.name).font(fonts.caption.weight(.semibold))
                         if !open { collapsedSummary(session) }
                     }
                     .foregroundStyle(.secondary)
@@ -427,7 +428,7 @@ struct ContentView: View {
     /// What a collapsed session still tells you: how many windows, and whether any need you.
     @ViewBuilder private func collapsedSummary(_ session: TmuxSession) -> some View {
         let states = session.windows.flatMap { [$0] + $0.paneItems }.map(\.state)
-        Text("\(session.windows.count)").font(.caption2.monospacedDigit())
+        Text("\(session.windows.count)").font(fonts.caption2.monospacedDigit())
             .padding(.horizontal, 5).padding(.vertical, 1)
             .background(Capsule().fill(Color.secondary.opacity(0.15)))
         if states.contains(.claudeNeedsYou) {
@@ -546,7 +547,7 @@ struct ContentView: View {
             .fixedSize()
             .help("Add a server or a session")
         }
-        .font(.caption)
+        .font(fonts.caption)
         .foregroundStyle(.secondary)
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
@@ -562,7 +563,7 @@ struct ContentView: View {
         .overlay(alignment: .top) {
             if let toast = model.toast {
                 Text(toast)
-                    .font(.callout)
+                    .font(fonts.callout)
                     .padding(.horizontal, 14).padding(.vertical, 8)
                     .background(.regularMaterial, in: Capsule())
                     .padding(.top, 12)
@@ -711,6 +712,7 @@ struct ContentView: View {
 }
 
 struct WindowRow: View {
+    @Environment(\.fonts) private var fonts
     let window: TmuxWindow
     let title: String
     var compact = false
@@ -724,14 +726,14 @@ struct WindowRow: View {
             VStack(alignment: .leading, spacing: 1) {
                 HStack(spacing: 4) {
                     if pinned {
-                        Image(systemName: "pin.fill").font(.system(size: 8))
+                        Image(systemName: "pin.fill").font(fonts.size(8))
                             .foregroundStyle(.tertiary)
                             .help("Pinned to the top")
                     }
                     Text(title).lineLimit(1)
                 }
                 Text(subtitle)
-                    .font(.caption)
+                    .font(fonts.caption)
                     .foregroundStyle(subtitleColor)
                     .lineLimit(1)
             }
@@ -789,6 +791,7 @@ struct WindowRow: View {
 
 /// Adding a server: pick a host from ~/.ssh/config or type one. Also the first-launch screen.
 struct AddServerView: View {
+    @Environment(\.fonts) private var fonts
     var sheet = false
     @EnvironmentObject private var app: AppModel
     @Environment(\.dismiss) private var dismiss
@@ -800,8 +803,8 @@ struct AddServerView: View {
 
     var body: some View {
         VStack(spacing: 16) {
-            Image(systemName: "server.rack").font(.system(size: 40)).foregroundStyle(.secondary)
-            Text(sheet ? "Add a server" : "Connect to your tmux machine").font(.title2.weight(.semibold))
+            Image(systemName: "server.rack").font(fonts.size(40)).foregroundStyle(.secondary)
+            Text(sheet ? "Add a server" : "Connect to your tmux machine").font(fonts.title2.weight(.semibold))
             Text("Pick a host from your SSH config or type one. It must connect without a password prompt (an SSH key or agent).")
                 .multilineTextAlignment(.center)
                 .foregroundStyle(.secondary)
@@ -814,7 +817,7 @@ struct AddServerView: View {
                 .buttonStyle(.borderedProminent)
                 .controlSize(.large)
                 .help("Run tmux and Claude sessions on this Mac")
-                Text("or a server over SSH:").font(.caption).foregroundStyle(.secondary)
+                Text("or a server over SSH:").font(fonts.caption).foregroundStyle(.secondary)
             }
             if !PlainTerminalStore.shared.enabled {
                 Button {
@@ -854,7 +857,7 @@ struct AddServerView: View {
                 .disabled(PortForwarder.configuredPorts(draft.trimmingCharacters(in: .whitespaces)).isEmpty)
                 .help("Uses the LocalForward lines in ~/.ssh/config for this host")
             if let error {
-                Text(error).font(.callout).foregroundStyle(.red).frame(maxWidth: 420).multilineTextAlignment(.center)
+                Text(error).font(fonts.callout).foregroundStyle(.red).frame(maxWidth: 420).multilineTextAlignment(.center)
             }
             HStack {
                 if sheet { Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction) }
@@ -896,6 +899,7 @@ struct AddServerView: View {
 
 /// A server's heading in the sidebar: its name, connection, port forwarding and menu.
 struct ServerHeader: View {
+    @Environment(\.fonts) private var fonts
     @ObservedObject var server: TmuxModel
     @ObservedObject var forwarder: PortForwarder
     let showName: Bool
@@ -912,13 +916,13 @@ struct ServerHeader: View {
         HStack(spacing: 6) {
             Circle().fill(server.connected ? Color.green : Color.orange).frame(width: 7, height: 7)
                 .accessibilityLabel(server.connected ? "Connected" : "Not connected")
-            Text(server.displayName).font(.headline).foregroundStyle(.primary)
+            Text(server.displayName).font(fonts.headline).foregroundStyle(.primary)
             if !forwarder.rules.isEmpty || forwarder.enabled {
                 let f = forwarder
                 Button { showingPorts.toggle() } label: {
                     Label(f.enabled ? "\(f.forwardedPorts.count)/\(f.activeRules.count)" : "\(f.rules.count)",
                           systemImage: "arrow.left.arrow.right")
-                        .font(.caption)
+                        .font(fonts.caption)
                         .foregroundStyle(!f.enabled ? Color.secondary
                                          : f.running && f.busyPorts.isEmpty ? Color.green : Color.orange)
                 }
@@ -968,6 +972,7 @@ struct ServerHeader: View {
 
 /// The ports forwarded for one server: what's running, and adding or switching off rules.
 struct PortsView: View {
+    @Environment(\.fonts) private var fonts
     @ObservedObject var forwarder: PortForwarder
     @State private var newLocal = ""
     @State private var newHost = "localhost"
@@ -977,7 +982,7 @@ struct PortsView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
-                Text("Ports · \(forwarder.host)").font(.headline)
+                Text("Ports · \(forwarder.host)").font(fonts.headline)
                 Spacer()
                 Toggle("", isOn: Binding(get: { forwarder.enabled }, set: { forwarder.setEnabled($0) }))
                     .toggleStyle(.switch)
@@ -985,16 +990,16 @@ struct PortsView: View {
                     .labelsHidden()
                     .help("Forward these ports to this Mac")
             }
-            Text(status).font(.callout).foregroundStyle(.secondary)
+            Text(status).font(fonts.callout).foregroundStyle(.secondary)
                 .lineLimit(3, reservesSpace: true)
                 .fixedSize(horizontal: false, vertical: true)
-            Text(forwarder.lastError ?? " ").font(.caption).foregroundStyle(.red)
+            Text(forwarder.lastError ?? " ").font(fonts.caption).foregroundStyle(.red)
                 .lineLimit(1)
 
             ScrollView {
                 if forwarder.rules.isEmpty {
                     Text("No forwards yet. Add one below, or put LocalForward lines in ~/.ssh/config for \(forwarder.host).")
-                        .font(.caption).foregroundStyle(.secondary)
+                        .font(fonts.caption).foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 } else {
@@ -1010,7 +1015,7 @@ struct PortsView: View {
 
             Divider()
             VStack(alignment: .leading, spacing: 6) {
-                Text("Add a port").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                Text("Add a port").font(fonts.caption.weight(.semibold)).foregroundStyle(.secondary)
                 HStack(spacing: 6) {
                     TextField("3000", text: $newLocal).frame(width: 58)
                         .help("Port on this Mac")
@@ -1025,8 +1030,8 @@ struct PortsView: View {
                         .disabled(Int(newLocal.trimmingCharacters(in: .whitespaces)) == nil)
                 }
                 .textFieldStyle(.roundedBorder)
-                .font(.callout.monospacedDigit())
-                Text(addError ?? " ").font(.caption).foregroundStyle(.red).lineLimit(1)
+                .font(fonts.callout.monospacedDigit())
+                Text(addError ?? " ").font(fonts.caption).foregroundStyle(.red).lineLimit(1)
             }
         }
         .padding(16)
@@ -1057,15 +1062,15 @@ struct PortsView: View {
                       : busy ? Color.orange
                       : live ? Color.green : Color.secondary)
                 .frame(width: 7, height: 7)
-            Text("\(rule.local)").font(.callout.monospacedDigit().weight(.medium))
+            Text("\(rule.local)").font(fonts.callout.monospacedDigit().weight(.medium))
                 .frame(width: 52, alignment: .leading)
             Text("→ \(rule.host):\(rule.remote)")
-                .font(.callout.monospaced())
+                .font(fonts.callout.monospaced())
                 .foregroundStyle(.secondary)
                 .lineLimit(1).truncationMode(.middle)
             Spacer(minLength: 4)
             if rule.fromConfig {
-                Text("config").font(.caption2).foregroundStyle(.tertiary)
+                Text("config").font(fonts.caption2).foregroundStyle(.tertiary)
                     .help("From a LocalForward line in ~/.ssh/config")
             }
             Button {
@@ -1098,6 +1103,7 @@ struct PortsView: View {
 
 /// Pick which lost windows to bring back.
 struct RestoreView: View {
+    @Environment(\.fonts) private var fonts
     @ObservedObject var server: TmuxModel
     @Environment(\.dismiss) private var dismiss
     @State private var candidates: [TmuxModel.SavedWindow]?
@@ -1105,9 +1111,9 @@ struct RestoreView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text("Restore windows on \(server.displayName)").font(.title3.weight(.semibold))
+            Text("Restore windows on \(server.displayName)").font(fonts.title3.weight(.semibold))
             Text("Windows that existed before and aren't running now. Claude windows resume their conversation in their original folder; shells open in their folder.")
-                .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                .font(fonts.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             if let candidates {
                 if candidates.isEmpty {
                     ContentUnavailableView("Nothing to restore", systemImage: "checkmark.circle",
@@ -1125,7 +1131,7 @@ struct RestoreView: View {
                                             VStack(alignment: .leading, spacing: 1) {
                                                 Text(title(c)).lineLimit(1)
                                                 Text("\(c.isClaude ? "Claude conversation" : c.command) · \((c.path as NSString).lastPathComponent)")
-                                                    .font(.caption).foregroundStyle(.secondary)
+                                                    .font(fonts.caption).foregroundStyle(.secondary)
                                             }
                                         }
                                     }
@@ -1172,6 +1178,7 @@ struct RestoreView: View {
 
 /// Working / Needs you / Done, as a small coloured pill (or just the symbol when compact).
 struct StateBadge: View {
+    @Environment(\.fonts) private var fonts
     let state: WindowState
     var done = false
     var compact = false
@@ -1214,7 +1221,7 @@ struct StateBadge: View {
 
     private func pill<C: View>(color: Color, @ViewBuilder _ c: () -> C) -> some View {
         HStack(spacing: 4) { c() }
-            .font(.caption2.weight(.semibold))
+            .font(fonts.caption2.weight(.semibold))
             .foregroundStyle(color)
             .padding(.horizontal, 6).padding(.vertical, 2)
             .background(Capsule().fill(color.opacity(0.14)))

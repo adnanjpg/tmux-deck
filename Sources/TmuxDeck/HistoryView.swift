@@ -26,7 +26,7 @@ struct HistoryView: View {
     private var header: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
-                Text("Past conversations").font(.title3.weight(.semibold))
+                Text("Past conversations").font(fonts.title3.weight(.semibold))
                 Spacer()
                 if store.loading { ProgressView().controlSize(.small) }
                 Button { Task { await store.load() } } label: { Image(systemName: "arrow.clockwise") }

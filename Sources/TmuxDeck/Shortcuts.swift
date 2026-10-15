@@ -55,7 +55,7 @@ struct ShortcutsView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack {
-                Text("Keyboard shortcuts").font(.title3.weight(.semibold))
+                Text("Keyboard shortcuts").font(fonts.title3.weight(.semibold))
                 Spacer()
                 Button("Done") { dismiss() }.keyboardShortcut(.defaultAction)
             }

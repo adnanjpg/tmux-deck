@@ -106,6 +106,8 @@ struct TmuxDeckApp: App {
                 ThemeSettings().tabItem { Label("Themes", systemImage: "paintpalette") }
             }
             .frame(width: 560)
+            .environment(\.fonts, Zoom.shared.font)
+            .font(Zoom.shared.font.body)
         }
     }
 }
@@ -127,6 +129,7 @@ struct RootView: View {
         }
         .environment(\.theme, theme)
         .environment(\.fonts, zoom.font)
+        .font(zoom.font.body)   // text with no explicit style follows the zoom too
         .tint(theme.tint)
         .foregroundStyle(theme.fg ?? Color.primary)
         .preferredColorScheme(theme.isDark.map { $0 ? .dark : .light })
@@ -206,6 +209,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 }
 
 struct SettingsView: View {
+    @Environment(\.fonts) private var fonts
     @AppStorage("fontSize") private var fontSize = 13.0
     @AppStorage("sound.finish.on") private var finishOn = true
     @AppStorage("sound.finish.name") private var finishSound = "Glass"
@@ -221,7 +225,7 @@ struct SettingsView: View {
         Form {
             Section("Notifications") {
                 Text("A banner appears only for a window you aren't looking at; the sound plays either way. Clicking a banner opens that window.")
-                    .font(.caption).foregroundStyle(.secondary)
+                    .font(fonts.caption).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                 Toggle("Banner when an assistant finishes", isOn: $finishBanner)
                 Toggle("Banner when an assistant needs your answer", isOn: $questionBanner)
@@ -234,13 +238,13 @@ struct SettingsView: View {
             }
             Section("Servers") {
                 Text("Add servers with the + button at the bottom of the sidebar. Each server's ••• menu has port forwarding and Remove.")
-                    .font(.caption).foregroundStyle(.secondary)
+                    .font(fonts.caption).foregroundStyle(.secondary)
             }
-            Section("Terminal") {
+            Section("Text size") {
                 Stepper("Text size: \(Int(fontSize)) pt (⌘+ / ⌘− / ⌘0)", value: $fontSize, in: 8...28)
                     .onChange(of: fontSize) { _, new in Zoom.shared.set(new) }
-                Text("Changes the chat, the console and the terminals straight away.")
-                    .font(.caption).foregroundStyle(.secondary)
+                Text("Zooms the whole window: sidebar, chat, console, terminals and panels.")
+                    .font(fonts.caption).foregroundStyle(.secondary)
             }
         }
         .formStyle(.grouped)
@@ -267,6 +271,7 @@ struct SettingsView: View {
 
 /// Pick a VS Code theme (built-in, from extensions, or imported), match VS Code, or use System.
 struct ThemeSettings: View {
+    @Environment(\.fonts) private var fonts
     @ObservedObject private var themes = ThemeManager.shared
     @State private var search = ""
     @State private var importError: String?
@@ -280,7 +285,7 @@ struct ThemeSettings: View {
                 Button { themes.scan() } label: { Image(systemName: "arrow.clockwise") }
                     .help("Look for newly installed themes")
             }
-            if let importError { Text(importError).font(.caption).foregroundStyle(.red) }
+            if let importError { Text(importError).font(fonts.caption).foregroundStyle(.red) }
             List {
                 Section {
                     row(title: "System", subtitle: "Plain macOS light and dark", id: "system", preview: nil)
@@ -299,7 +304,7 @@ struct ThemeSettings: View {
             }
             .frame(minHeight: 380)
             Text("\(themes.available.count) themes from VS Code, Cursor, your installed extensions and imports.")
-                .font(.caption).foregroundStyle(.secondary)
+                .font(fonts.caption).foregroundStyle(.secondary)
         }
         .padding(16)
     }
@@ -313,7 +318,7 @@ struct ThemeSettings: View {
                 }
                 VStack(alignment: .leading, spacing: 1) {
                     Text(title)
-                    Text(subtitle).font(.caption).foregroundStyle(.secondary)
+                    Text(subtitle).font(fonts.caption).foregroundStyle(.secondary)
                 }
                 Spacer()
                 if themes.selection == id { Image(systemName: "checkmark").foregroundStyle(Color.accentColor) }

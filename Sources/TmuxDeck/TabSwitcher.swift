@@ -262,6 +262,7 @@ final class TabSwitcherController: ObservableObject {
 /// The switcher: a section per server and tmux session, each a grid of window thumbnails,
 /// with the one you came from marked and the highlighted one ringed.
 private struct TabSwitcherHUD: View {
+    @Environment(\.fonts) private var fonts
     @EnvironmentObject private var controller: TabSwitcherController
     @Environment(\.theme) private var theme
 
@@ -276,10 +277,10 @@ private struct TabSwitcherHUD: View {
                         VStack(alignment: .leading, spacing: 8) {
                             HStack(spacing: 6) {
                                 Image(systemName: group.host == nil ? "laptopcomputer" : "server.rack")
-                                    .font(.caption)
-                                Text(group.label).font(.callout.weight(.semibold))
+                                    .font(fonts.caption)
+                                Text(group.label).font(fonts.callout.weight(.semibold))
                                 Text("\(group.items.count)")
-                                    .font(.caption2.monospacedDigit())
+                                    .font(fonts.caption2.monospacedDigit())
                                     .padding(.horizontal, 5).padding(.vertical, 1)
                                     .background(Capsule().fill(Color.secondary.opacity(0.15)))
                             }
@@ -309,7 +310,7 @@ private struct TabSwitcherHUD: View {
 
     private var hint: some View {
         Text("⌃⇥ next · ⌃⇧⇥ back · ↑↓ session · ↩ switch · esc cancel")
-            .font(.caption2)
+            .font(fonts.caption2)
             .foregroundStyle(.secondary)
             .padding(.horizontal, 12).padding(.vertical, 6)
             .background(Capsule().fill(.regularMaterial))
@@ -332,7 +333,7 @@ private struct TabSwitcherHUD: View {
                 } else if controller.loadingThumbnails {
                     ProgressView().controlSize(.small)
                 } else {
-                    Image(systemName: item.icon).font(.title2).foregroundStyle(.secondary)
+                    Image(systemName: item.icon).font(fonts.title2).foregroundStyle(.secondary)
                 }
             }
             .frame(width: thumbWidth, height: thumbHeight)
@@ -342,7 +343,7 @@ private struct TabSwitcherHUD: View {
             .overlay(alignment: .topTrailing) {
                 if here {
                     Text("current")
-                        .font(.caption2.weight(.semibold))
+                        .font(fonts.caption2.weight(.semibold))
                         .padding(.horizontal, 6).padding(.vertical, 2)
                         .background(Capsule().fill(.regularMaterial))
                         .padding(6)
@@ -351,11 +352,11 @@ private struct TabSwitcherHUD: View {
 
             HStack(spacing: 6) {
                 Image(systemName: item.icon)
-                    .font(.caption)
+                    .font(fonts.caption)
                     .foregroundStyle(item.stateColor ?? .secondary)
                 VStack(alignment: .leading, spacing: 0) {
-                    Text(item.title).font(.callout).lineLimit(1)
-                    Text(item.subtitle).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                    Text(item.title).font(fonts.callout).lineLimit(1)
+                    Text(item.subtitle).font(fonts.caption2).foregroundStyle(.secondary).lineLimit(1)
                 }
                 Spacer(minLength: 0)
             }

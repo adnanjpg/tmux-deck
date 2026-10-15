@@ -176,7 +176,7 @@ private struct FileRow: View, Equatable {
             HStack(spacing: 5) {
                 if file.isDirectory {
                     Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
-                        .font(.system(size: 9, weight: .semibold))
+                        .font(fonts.size(9, weight: .semibold))
                         .foregroundStyle(.tertiary)
                         .frame(width: 10)
                 } else {

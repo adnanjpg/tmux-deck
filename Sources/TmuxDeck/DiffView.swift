@@ -152,7 +152,7 @@ struct DiffView: View {
             Button { store.toggle(file) } label: {
                 HStack(spacing: 8) {
                     Image(systemName: store.expanded.contains(file.path) ? "chevron.down" : "chevron.right")
-                        .font(.system(size: 9, weight: .semibold)).foregroundStyle(.tertiary).frame(width: 10)
+                        .font(fonts.size(9, weight: .semibold)).foregroundStyle(.tertiary).frame(width: 10)
                     Text(file.status).font(fonts.caption.monospaced().weight(.bold))
                         .foregroundStyle(file.statusColor).frame(width: 12)
                     Text(file.name).font(fonts.callout.weight(.medium)).lineLimit(1)
