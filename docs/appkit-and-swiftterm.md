@@ -157,6 +157,12 @@ Zoom covers the **whole window**, not just the chat:
   console) and compare it in `updateNSView`, which is how they pick up a change without a notification.
 - Toolbar items are AppKit's and stay at the system size; `AnsiThumbnail` keeps its own 9pt because
   the thumbnail is scaled to fit anyway.
+- The sidebar `List` sets its own row and header font, which beats the root `.font`. Rows and header
+  icons there (`WindowRow`, `PlainTerminalRow`, section headers, the `•••`/`+` menu labels) name
+  `fonts.body` explicitly, and icon slots use `fonts.points(18)` rather than a fixed width.
+- A zoom step re-lays out every message, terminal and row, so `Zoom.set` **coalesces**: it records
+  the wanted size at once but publishes `size` (and posts `.fontSizeChanged`) 120 ms after the last
+  step. Holding ⌘+ does one rebuild, not one per key repeat. Read `pending` for "can zoom in/out".
 
 If you add a view that uses `fonts.` it needs `@Environment(\.fonts) private var fonts` — in the
 struct, not an extension (property wrappers can't live in extensions).

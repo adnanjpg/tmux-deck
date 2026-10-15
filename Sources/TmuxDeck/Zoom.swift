@@ -13,26 +13,46 @@ final class Zoom: ObservableObject {
     static let defaultSize: Double = 13
     static let range: ClosedRange<Double> = 8...28
 
+    /// The size the window is drawn at. Changing it re-lays out every message, terminal and
+    /// row, which is far too much to do once per key repeat — so `set` coalesces a burst of
+    /// steps and commits here once the keys stop.
     @Published private(set) var size: Double
+    /// The size the user has asked for; `size` catches up a moment later.
+    private var pending: Double
+    private var commit: DispatchWorkItem?
 
     private init() {
         let stored = UserDefaults.standard.double(forKey: "fontSize")
-        size = stored > 0 ? min(max(stored, Self.range.lowerBound), Self.range.upperBound) : Self.defaultSize
+        let initial = stored > 0 ? min(max(stored, Self.range.lowerBound), Self.range.upperBound) : Self.defaultSize
+        size = initial
+        pending = initial
     }
 
     var percent: Int { Int((size / Self.defaultSize * 100).rounded()) }
-    var canZoomIn: Bool { size < Self.range.upperBound }
-    var canZoomOut: Bool { size > Self.range.lowerBound }
+    var canZoomIn: Bool { pending < Self.range.upperBound }
+    var canZoomOut: Bool { pending > Self.range.lowerBound }
 
-    func zoomIn() { set(size + 1) }
-    func zoomOut() { set(size - 1) }
+    func zoomIn() { set(pending + 1) }
+    func zoomOut() { set(pending - 1) }
     func reset() { set(Self.defaultSize) }
 
     func set(_ value: Double) {
         let clamped = min(max(value.rounded(), Self.range.lowerBound), Self.range.upperBound)
-        guard clamped != size else { return }
-        size = clamped
-        UserDefaults.standard.set(clamped, forKey: "fontSize")
+        guard clamped != pending else { return }
+        pending = clamped
+        commit?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            MainActor.assumeIsolated { self?.apply() }
+        }
+        commit = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12, execute: work)
+    }
+
+    private func apply() {
+        commit = nil
+        guard pending != size else { return }
+        size = pending
+        UserDefaults.standard.set(size, forKey: "fontSize")
         NotificationCenter.default.post(name: .fontSizeChanged, object: nil)
     }
 

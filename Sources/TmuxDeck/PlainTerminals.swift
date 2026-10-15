@@ -545,9 +545,10 @@ struct PlainTerminalRow: View {
                     Image(systemName: terminal.kind.systemImage).foregroundStyle(.secondary)
                 }
             }
-            .frame(width: 18)
+            .font(fonts.body)
+            .frame(width: fonts.points(18))
             VStack(alignment: .leading, spacing: 1) {
-                Text(terminal.title).lineLimit(1)
+                Text(terminal.title).font(fonts.body).lineLimit(1)
                 Text(subtitle)
                     .font(fonts.caption).foregroundStyle(.secondary).lineLimit(1)
             }

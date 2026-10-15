@@ -197,7 +197,7 @@ struct ContentView: View {
                     }
                 } header: {
                     HStack {
-                        Image(systemName: "laptopcomputer").foregroundStyle(.secondary)
+                        Image(systemName: "laptopcomputer").font(fonts.headline).foregroundStyle(.secondary)
                         Text("This Mac · terminals").font(fonts.headline).foregroundStyle(.primary)
                         Spacer()
                         Menu {
@@ -207,7 +207,7 @@ struct ContentView: View {
                             Divider()
                             Button("Hide this section") { plain.enabled = false }
                                 .disabled(!plain.terminals.isEmpty)
-                        } label: { Image(systemName: "plus.circle") }
+                        } label: { Image(systemName: "plus.circle").font(fonts.body) }
                         .menuStyle(.borderlessButton)
                         .menuIndicator(.hidden)
                         .fixedSize()
@@ -386,7 +386,7 @@ struct ContentView: View {
                 Menu {
                     sessionMenu(session.name, server)
                 } label: {
-                    Image(systemName: "ellipsis")
+                    Image(systemName: "ellipsis").font(fonts.body)
                 }
                 .menuStyle(.borderlessButton)
                 .menuIndicator(.hidden)
@@ -539,7 +539,7 @@ struct ContentView: View {
                 Button("New Codex on this Mac (no tmux)") { openPlain(.codex) }
                 Button("New session on \(model.displayName)…") { target = model; renameText = ""; newSessionPrompt = true }
             } label: {
-                Image(systemName: "plus")
+                Image(systemName: "plus").font(fonts.body)
                     .accessibilityLabel("New window, terminal or server")
             }
             .menuStyle(.borderlessButton)
@@ -721,8 +721,10 @@ struct WindowRow: View {
 
     var body: some View {
         HStack(spacing: 8) {
+            // The sidebar list sets its own row font, so the icon and title say theirs outright.
             icon
-                .frame(width: 18)
+                .font(fonts.body)
+                .frame(width: fonts.points(18))
             VStack(alignment: .leading, spacing: 1) {
                 HStack(spacing: 4) {
                     if pinned {
@@ -730,7 +732,7 @@ struct WindowRow: View {
                             .foregroundStyle(.tertiary)
                             .help("Pinned to the top")
                     }
-                    Text(title).lineLimit(1)
+                    Text(title).font(fonts.body).lineLimit(1)
                 }
                 Text(subtitle)
                     .font(fonts.caption)
@@ -914,7 +916,7 @@ struct ServerHeader: View {
 
     var body: some View {
         HStack(spacing: 6) {
-            Circle().fill(server.connected ? Color.green : Color.orange).frame(width: 7, height: 7)
+            Circle().fill(server.connected ? Color.green : Color.orange).frame(width: fonts.points(7), height: fonts.points(7))
                 .accessibilityLabel(server.connected ? "Connected" : "Not connected")
             Text(server.displayName).font(fonts.headline).foregroundStyle(.primary)
             if !forwarder.rules.isEmpty || forwarder.enabled {
@@ -951,7 +953,7 @@ struct ServerHeader: View {
                 Divider()
                 Button("Remove server…", role: .destructive) { confirmRemove = true }
             } label: {
-                Image(systemName: "ellipsis.circle").accessibilityLabel("Server actions")
+                Image(systemName: "ellipsis.circle").font(fonts.body).accessibilityLabel("Server actions")
             }
             .menuStyle(.borderlessButton)
             .menuIndicator(.hidden)
