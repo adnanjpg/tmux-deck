@@ -156,6 +156,14 @@ every visible message. Things that keep scrolling smooth:
 - `ChatStore.poll` only assigns `stale`/`missing`/`loaded` when the value changes — assigning a
   `@Published` the same value still fires `objectWillChange`.
 - `PRPanelForChat` scans the transcript for PR mentions in `onChange(of: store.items)`, not in `body`.
+- `ChatView` does **not** observe `TmuxModel`. The model publishes about once a second, and the
+  chat owns the biggest layout in the app; the bits that need live state (`LiveActivity`,
+  `HeaderBadge`, `SendingMessage`) are small child views with their own `@EnvironmentObject`.
+- Claude's status line (`ActivityView`) sits **below** the scroll view, not at the end of the message
+  stack. Its text changes every second while Claude works and its glyph runs a `phaseAnimator`; a
+  child that changes size inside a plain `VStack` of hundreds of rows makes SwiftUI re-measure all
+  of them (that showed up as `StackLayout.sizeThatFits` / `explicitAlignment` eating ~30% of the
+  main thread in a `sample`).
 - **Environment values must be `Equatable`.** `AppFont` and `AppTheme` are read by nearly every
   view; while `AppFont` wasn't Equatable, SwiftUI took it as changed on every `RootView` render
   (which happens whenever `AppModel`, the theme store or the plain-terminal store publish) and

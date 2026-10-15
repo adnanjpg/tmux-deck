@@ -8,7 +8,8 @@ import SwiftUI
 struct ChatView: View {
     @Environment(\.fonts) private var fonts
     @Environment(\.theme) private var theme
-    @EnvironmentObject private var model: TmuxModel
+    // No `TmuxModel` here on purpose: it publishes every second, and this view owns the biggest
+    // layout in the app. The few live bits (activity, badge) are small child views that observe it.
     var window: TmuxWindow?
     @ObservedObject var store: ChatStore
     /// How many of the latest turns are rendered; older ones load on request.
@@ -66,15 +67,6 @@ struct ChatView: View {
                             SendingMessage(message: pending, window: window, store: store)
                         }
                     }
-                    if let window, let activity = model.activities[window.id] {
-                        ActivityView(activity: activity, working: window.state == .claudeWorking)
-                    } else if window?.state == .claudeWorking {
-                        HStack(spacing: 8) {
-                            ProgressView().controlSize(.small)
-                            Text("\(store.assistant.displayName) is working…").foregroundStyle(.secondary)
-                        }
-                        .padding(.top, 4)
-                    }
                 }
                 .frame(maxWidth: 860, alignment: .leading)
                 .padding(.horizontal, 24)
@@ -124,6 +116,10 @@ struct ChatView: View {
             }
             }
             if let window {
+                // Below the scroll view, not inside it: the status line changes every second while
+                // Claude works, and a child that changes size inside that stack re-lays out every
+                // message above it.
+                LiveActivity(window: window, assistant: store.assistant)
                 Divider()
                 VStack(spacing: 0) {
                     ComposeBar(window: window)
@@ -200,7 +196,7 @@ extension ChatView {
         let allCollapsed = !ids.isEmpty && ids.allSatisfy(store.collapsed.contains)
         return HStack(spacing: 10) {
             if let window {
-                StateBadge(state: window.state, done: model.unseenDone.contains(window.id))
+                HeaderBadge(window: window)
             } else {
                 Label("Finished", systemImage: "clock.arrow.circlepath")
                     .font(fonts.caption).foregroundStyle(.secondary)
@@ -635,6 +631,44 @@ struct ChatRow: View {
 }
 
 /// Claude's live status line, like the one under its output in the terminal.
+/// What Claude is doing right now, under the transcript. Observes the model so the chat
+/// above it doesn't have to.
+struct LiveActivity: View {
+    @Environment(\.theme) private var theme
+    @EnvironmentObject private var model: TmuxModel
+    let window: TmuxWindow
+    let assistant: CodingAssistant
+
+    var body: some View {
+        Group {
+            if let activity = model.activities[window.id] {
+                ActivityView(activity: activity, working: window.state == .claudeWorking)
+            } else if window.state == .claudeWorking {
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small)
+                    Text("\(assistant.displayName) is working…").foregroundStyle(.secondary)
+                }
+                .padding(.top, 10)
+            }
+        }
+        .frame(maxWidth: 860, alignment: .leading)
+        .padding(.horizontal, 24)
+        .padding(.bottom, 10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(theme.bg)
+    }
+}
+
+/// The header's state badge; it needs "finished while you were away", which lives in the model.
+struct HeaderBadge: View {
+    @EnvironmentObject private var model: TmuxModel
+    let window: TmuxWindow
+
+    var body: some View {
+        StateBadge(state: window.state, done: model.unseenDone.contains(window.id))
+    }
+}
+
 struct ActivityView: View {
     @Environment(\.fonts) private var fonts
     let activity: ClaudeActivity

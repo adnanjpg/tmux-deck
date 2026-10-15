@@ -108,3 +108,19 @@ the machine. Prefer reading the code and a static screenshot over driving the ke
 Say what was actually verified and what wasn't. "Built and installed, but I couldn't exercise the
 drag-and-drop path" is useful; implying it was tested is not. Screenshots of the real window are the
 strongest evidence — use them when the change is visual.
+
+## Profiling lag
+
+Don't guess; sample the running app:
+
+```bash
+sample "$(pgrep -f 'Tmux Deck.app/Contents/MacOS/TmuxDeck')" 10 -f /tmp/deck-sample.txt
+```
+
+Read **only the main thread's subtree** (the first `Thread_… DispatchQueue_1: com.apple.main-thread`
+block, up to the next `    NNNN Thread_` line). Other threads' stacks follow it and a loose grep
+over the whole file mixes them in — a blocking `gh` read on a cooperative-pool thread once looked
+like a 5-second main-thread stall that way. On the main thread, `mach_msg` under
+`__CFRunLoopServiceMachPort` is idle; `__CFRunLoopDoObservers` → `ViewRendererHost.updateViewGraph`
+is SwiftUI work, and `StackLayout`/`LayoutEngineBox` frames under it mean a big stack is being
+re-measured. App frames (`(in TmuxDeck)`) name the body that caused it.
