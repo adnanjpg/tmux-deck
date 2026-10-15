@@ -5,7 +5,7 @@ import UniformTypeIdentifiers
 // MARK: The theme the views use
 
 /// Colors the app paints with. `.system` is plain macOS; a VS Code theme fills in the rest.
-struct AppTheme {
+struct AppTheme: Equatable {
     var name: String
     var isDark: Bool?                 // nil: follow macOS
     var background: NSColor
@@ -57,7 +57,7 @@ struct AppTheme {
     }
 }
 
-struct TokenRule {
+struct TokenRule: Equatable {
     var scopes: [String]
     var foreground: NSColor?
     var italic = false

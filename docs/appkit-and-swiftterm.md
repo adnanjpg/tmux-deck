@@ -156,6 +156,10 @@ every visible message. Things that keep scrolling smooth:
 - `ChatStore.poll` only assigns `stale`/`missing`/`loaded` when the value changes — assigning a
   `@Published` the same value still fires `objectWillChange`.
 - `PRPanelForChat` scans the transcript for PR mentions in `onChange(of: store.items)`, not in `body`.
+- **Environment values must be `Equatable`.** `AppFont` and `AppTheme` are read by nearly every
+  view; while `AppFont` wasn't Equatable, SwiftUI took it as changed on every `RootView` render
+  (which happens whenever `AppModel`, the theme store or the plain-terminal store publish) and
+  invalidated the whole window — that was the scroll lag after zoom went window-wide.
 
 ## Text size
 

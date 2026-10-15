@@ -65,7 +65,7 @@ extension Notification.Name {
 
 /// The app's text sizes, all derived from the one the user picked. The numbers are the
 /// macOS defaults they replace, so at 13pt nothing moves.
-struct AppFont {
+struct AppFont: Equatable {
     var base: CGFloat = 13
 
     private var scale: CGFloat { base / 13 }
