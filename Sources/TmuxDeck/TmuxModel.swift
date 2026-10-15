@@ -146,6 +146,13 @@ struct ClaudeActivity: Equatable {
 struct PromptOption: Hashable {
     var key: String
     var label: String
+    /// The explanation printed under the option, when the prompt has one (AskUserQuestion does).
+    var detail: String? = nil
+    /// "Type something." / "Chat about this": the prompt's own escape hatches, not answers.
+    var isSpecial: Bool {
+        let l = label.lowercased()
+        return l.hasPrefix("type something") || l.hasPrefix("chat about")
+    }
 }
 
 struct TmuxSession: Identifiable, Hashable {
@@ -736,7 +743,7 @@ for pane, pid, path in panes:
     /// go there instead, so say so rather than pressing it.
     private func noticeLeftoverInput(_ items: [TmuxWindow], captures: [String: [String]]) {
         var found: [String: String] = [:]
-        for w in items where w.assistant == .claude && !w.state.isRunningProgram {
+        for w in items where w.assistant == .claude && !w.state.isRunningProgram && w.state != .claudeNeedsYou {
             let typed = Self.typedInput(captures[w.paneID] ?? [])
             guard !typed.isEmpty else { continue }
             // Not while one of our own messages is on its way through that box.
@@ -797,6 +804,9 @@ for pane, pid, path in panes:
     static func typedInput(_ rawLines: [String]) -> String {
         guard let start = rawLines.lastIndex(where: { stripANSI($0).trimmingCharacters(in: .whitespaces).hasPrefix("❯") })
         else { return "" }
+        // A menu's selected row ("❯ 1. Yes") uses the same marker. That's a cursor, not text you
+        // typed; reading on from it pulled a whole question into the message box once.
+        if stripANSI(rawLines[start]).firstMatch(of: try! Regex(#"^\s*❯\s*\d+\.\s"#)) != nil { return "" }
         var lines: [String] = []
         for (n, raw) in rawLines[start...].enumerated() {
             let plain = stripANSI(raw).trimmingCharacters(in: .whitespaces)
@@ -855,7 +865,9 @@ for pane, pid, path in panes:
         let lines = rawLines.map(stripANSI).filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
         let rules = lines.indices.filter { lines[$0].trimmingCharacters(in: .whitespaces).hasPrefix("───") }
         guard rules.count >= 2, let bottom = rules.last, bottom + 1 < lines.count else { return nil }
-        return Array(lines[(bottom + 1)...].prefix(6))
+        let option = try! Regex(#"^\s*(?:❯\s*)?\d+\.\s"#)
+        let footer = lines[(bottom + 1)...].prefix(6).filter { $0.firstMatch(of: option) == nil && !isPromptHelp($0) }
+        return footer.isEmpty ? nil : Array(footer)
     }
 
     private static let spinnerGlyphs: Set<Character> = ["✻", "✽", "✢", "✳", "✶", "✷", "✸", "✹", "✺", "·", "*", "⏺", "●"]
@@ -966,19 +978,42 @@ for pane, pid, path in panes:
         }
     }
 
+    /// The numbered choices on screen. Lines under a choice (until the next one, a blank, a rule
+    /// or the "Enter to select" help) are its explanation — AskUserQuestion prints one per option,
+    /// wrapped to the pane width, so they're joined back into a sentence.
     static func promptOptions(_ lines: [String]) -> [PromptOption] {
         let pattern = try! Regex(#"^[\s│|]*(?:❯\s*)?(\d)\.\s+(.+?)[\s│|]*$"#)
         var seen = Set<String>()
         var result: [PromptOption] = []
         for line in lines {
-            guard let m = line.firstMatch(of: pattern) else { continue }
-            guard let key = m[1].substring.map(String.init),
-                  let label = m[2].substring.map(String.init) else { continue }
-            if seen.insert(key).inserted {
-                result.append(PromptOption(key: key, label: label))
+            let plain = line.trimmingCharacters(in: .whitespaces)
+                .trimmingCharacters(in: CharacterSet(charactersIn: "│|╭╮╰╯ "))
+            if let m = line.firstMatch(of: pattern) {
+                guard let key = m[1].substring.map(String.init),
+                      let label = m[2].substring.map(String.init) else { continue }
+                if seen.insert(key).inserted {
+                    result.append(PromptOption(key: key, label: label))
+                } else {
+                    break   // the same number again: a second copy of the menu (a redraw); stop
+                }
+                continue
             }
+            guard !result.isEmpty else { continue }
+            let raw = line.trimmingCharacters(in: .whitespaces)
+            // The menu ends at the box's bottom edge, a rule, or the input line under it.
+            if raw.hasPrefix("╰") || raw.hasPrefix("─") || raw.hasPrefix("━") || raw.hasPrefix("❯") { break }
+            if plain.isEmpty || isPromptHelp(plain) { continue }
+            let i = result.count - 1
+            result[i].detail = ((result[i].detail ?? "") + " " + plain).trimmingCharacters(in: .whitespaces)
         }
         return result
+    }
+
+    /// "Enter to select · Tab/Arrow keys to navigate · Esc to cancel" and friends.
+    static func isPromptHelp(_ line: String) -> Bool {
+        let l = line.lowercased()
+        return (l.contains("enter to") && (l.contains("select") || l.contains("confirm")))
+            || l.contains("to navigate") || l.contains("esc to cancel")
     }
 
     private var lastViewActive: [String: String] = [:]

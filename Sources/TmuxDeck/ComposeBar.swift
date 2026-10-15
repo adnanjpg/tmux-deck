@@ -34,6 +34,10 @@ struct ComposeBar: View {
             if window.state == .claudeNeedsYou, let options = model.promptOptions[window.id], !options.isEmpty {
                 if let sid = window.claude?.sessionID, let asked = model.chatStore(for: sid).pendingQuestions {
                     QuestionCard(questions: asked, screenOptions: options, window: window)
+                } else if let asked = Self.screenQuestion(options, text: model.promptQuestions[window.id]) {
+                    // The transcript hasn't caught up (or it's a permission prompt): the same card,
+                    // built from what's on screen — labels and the explanations under them.
+                    QuestionCard(questions: [asked], screenOptions: options, window: window)
                 } else {
                     promptButtons(options)
                 }
@@ -234,6 +238,15 @@ struct ComposeBar: View {
     private var placeholder: String {
         guard let assistant = window.assistant else { return "Type a command — Enter to run" }
         return "Message \(assistant.displayName) — Enter to send, Shift+Enter for a new line"
+    }
+
+    /// A question made from the screen alone, when the transcript has nothing richer.
+    static func screenQuestion(_ options: [PromptOption], text: String?) -> AskQuestion? {
+        let answers = options.filter { !$0.isSpecial }
+        guard !answers.isEmpty else { return nil }
+        return AskQuestion(question: text ?? "Claude is asking",
+                           header: nil, multiSelect: nil,
+                           options: answers.map { AskQuestion.Option(label: $0.label, description: $0.detail) })
     }
 
     private func promptButtons(_ options: [PromptOption]) -> some View {
@@ -624,7 +637,12 @@ struct QuestionCard: View {
                         }
                         .padding(10)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(RoundedRectangle(cornerRadius: 8).fill(Color.secondary.opacity(0.07)))
+                        .background(RoundedRectangle(cornerRadius: 8)
+                            .fill(option.label.localizedCaseInsensitiveContains("(recommended)")
+                                  ? Color.accentColor.opacity(0.10) : Color.secondary.opacity(0.07)))
+                        .overlay(RoundedRectangle(cornerRadius: 8)
+                            .strokeBorder(option.label.localizedCaseInsensitiveContains("(recommended)")
+                                          ? Color.accentColor.opacity(0.5) : .clear))
                         .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)

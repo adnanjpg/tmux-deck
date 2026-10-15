@@ -94,8 +94,18 @@ Layout of a Claude screen, bottom-up:
 - `TmuxModel.typedInput()` returns what's actually typed, skipping the *dim* (SGR `2`) suggestion
   text; `suggestion()` returns the dim text when nothing is typed.
 - Permission prompts are numbered choices (`❯ 1. Yes`); the question text is whatever sits above the
-  first numbered line. Richer questions (`AskUserQuestion`) come from the transcript instead, where
-  the full option list with descriptions is available — the screen only has the labels.
+  first numbered line. `promptOptions` also keeps the lines printed *under* each choice as its
+  `detail` (AskUserQuestion prints every option's explanation, wrapped to the pane width) and stops
+  at the box's bottom edge, a rule or the input line. "Type something." / "Chat about this" are
+  `isSpecial`: the prompt's escape hatches, not answers.
+- `ComposeBar` shows the same `QuestionCard` either way: from the transcript's `AskUserQuestion`
+  (`ChatStore.pendingQuestions`) when it has caught up, otherwise from the screen
+  (`ComposeBar.screenQuestion`). The transcript poll runs a second or two behind the tmux poll, so
+  the screen version is what you see first. The flat row of chips is only a last resort.
+- **The menu cursor is `❯` too.** `❯ 1. Yes` is the selected choice, not the input line: `typedInput`
+  returns nothing for it, `noticeLeftoverInput` skips windows in `.claudeNeedsYou`, and `footer()`
+  drops numbered lines and the "Enter to select · … · Esc to cancel" help, otherwise a question's
+  options turned up in the message box and in the status chips.
 - If a read finds no status line (mid-redraw, or a menu covering it), reuse the last good one for a
   minute rather than blanking the chips.
 
