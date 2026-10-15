@@ -189,7 +189,7 @@ struct ContentView: View {
                     ForEach(plain.terminals(on: Remote.localHost)) { t in
                         PlainTerminalRow(terminal: t)
                             .tag(t.tag)
-                            .draggable(t.tag)
+                            .onDrag { SidebarDrag.begin(t.tag) }
                             .contextMenu { plainTerminalMenu(t) }
                     }
                     if plain.terminals(on: Remote.localHost).isEmpty {
@@ -358,7 +358,7 @@ struct ContentView: View {
             ForEach(loose) { t in
                 PlainTerminalRow(terminal: t)
                     .tag(t.tag)
-                    .draggable(t.tag)
+                    .onDrag { SidebarDrag.begin(t.tag) }
                     .contextMenu { plainTerminalMenu(t) }
             }
         }
@@ -395,25 +395,22 @@ struct ContentView: View {
             .padding(.top, 6)
             .selectionDisabled()
             .contextMenu { sessionMenu(session.name, server) }
-            .dropDestination(for: String.self) { ids, _ in
-                server.handleDrop(ids, onto: nil, session: session.name)
-            }
+            .modifier(SessionDropTarget(server: server, session: session.name))
             ForEach(open ? visibleWindows(server, session.windows) : []) { window in
                 WindowRow(window: window, title: server.displayTitle(window),
                           done: server.unseenDone.contains(window.id),
                           pinned: server.isPinned(window))
+                    .equatable()
                     .tag(tag(window.id))
                     .contextMenu { windowMenu(window, server) }
-                    .draggable("\(server.host)#\(window.id)")
-                    .dropDestination(for: String.self) { ids, _ in
-                        server.handleDrop(ids, onto: window, session: session.name)
-                    }
+                    .onDrag { SidebarDrag.begin("\(server.host)#\(window.id)") }
+                    .modifier(WindowDropTarget(server: server, window: window, session: session.name))
                 ForEach(window.paneItems) { pane in
                     WindowRow(window: pane, title: server.displayTitle(pane), compact: true)
                         .padding(.leading, 20)
                         .tag(tag(pane.id))
                         .contextMenu { paneMenu(pane, server) }
-                        .draggable("\(server.host)#\(pane.id)")
+                        .onDrag { SidebarDrag.begin("\(server.host)#\(pane.id)") }
                 }
             }
         }
@@ -711,13 +708,17 @@ struct ContentView: View {
     }
 }
 
-struct WindowRow: View {
+struct WindowRow: View, Equatable {
     @Environment(\.fonts) private var fonts
     let window: TmuxWindow
     let title: String
     var compact = false
     var done = false
     var pinned = false
+
+    static func == (a: WindowRow, b: WindowRow) -> Bool {
+        a.window == b.window && a.title == b.title && a.compact == b.compact && a.done == b.done && a.pinned == b.pinned
+    }
 
     var body: some View {
         HStack(spacing: 8) {
@@ -1227,5 +1228,128 @@ struct StateBadge: View {
             .foregroundStyle(color)
             .padding(.horizontal, 6).padding(.vertical, 2)
             .background(Capsule().fill(color.opacity(0.14)))
+    }
+}
+
+
+// MARK: Sidebar drop targets
+
+/// Where a dragged window would land on this row: a line above or below it, or the whole row
+/// lit when a pane is being joined into it. Without this the drop was a guess.
+private struct WindowDropTarget: ViewModifier {
+    @ObservedObject var server: TmuxModel
+    let window: TmuxWindow
+    let session: String
+    @State private var edge: TmuxModel.DropEdge?
+    @State private var joining = false
+    @State private var height: CGFloat = 24
+
+    func body(content: Content) -> some View {
+        content
+            .background(GeometryReader { g in
+                Color.clear.onAppear { height = g.size.height }.onChange(of: g.size.height) { _, h in height = h }
+            })
+            .overlay(alignment: edge == .bottom ? .bottom : .top) {
+                if let edge {
+                    Capsule().fill(Color.accentColor)
+                        .frame(height: 3)
+                        .padding(.horizontal, 2)
+                        .offset(y: edge == .bottom ? 3 : -3)
+                        .allowsHitTesting(false)
+                }
+            }
+            .overlay {
+                if joining {
+                    RoundedRectangle(cornerRadius: 6)
+                        .strokeBorder(Color.accentColor, lineWidth: 2)
+                        .background(RoundedRectangle(cornerRadius: 6).fill(Color.accentColor.opacity(0.12)))
+                        .allowsHitTesting(false)
+                }
+            }
+            .animation(.easeOut(duration: 0.12), value: edge)
+            .animation(.easeOut(duration: 0.12), value: joining)
+            .onDrop(of: [.utf8PlainText, .plainText],
+                    delegate: WindowRowDrop(server: server, window: window, session: session,
+                                            height: { height }, edge: $edge, joining: $joining))
+    }
+}
+
+private struct WindowRowDrop: DropDelegate {
+    let server: TmuxModel
+    let window: TmuxWindow
+    let session: String
+    let height: () -> CGFloat
+    @Binding var edge: TmuxModel.DropEdge?
+    @Binding var joining: Bool
+
+    func validateDrop(info: DropInfo) -> Bool {
+        info.hasItemsConforming(to: [.utf8PlainText, .plainText])
+    }
+
+    private func update(_ info: DropInfo) {
+        // A pane being dragged joins the window, so it lights the row rather than an edge.
+        let pane = draggedPane
+        if pane != joining { joining = pane }
+        let e: TmuxModel.DropEdge? = pane ? nil : (info.location.y < height() / 2 ? .top : .bottom)
+        if e != edge { edge = e }
+    }
+
+    /// The sidebar remembers what it started dragging, since the payload is only readable on drop.
+    private var draggedPane: Bool {
+        guard let tag = SidebarDrag.current, let hash = tag.firstIndex(of: "#") else { return false }
+        return server.item(String(tag[tag.index(after: hash)...]))?.isPane ?? false
+    }
+
+    func dropEntered(info: DropInfo) { update(info) }
+    func dropUpdated(info: DropInfo) -> DropProposal? { update(info); return DropProposal(operation: .move) }
+    func dropExited(info: DropInfo) { edge = nil; joining = false }
+
+    func performDrop(info: DropInfo) -> Bool {
+        let e = edge ?? .top
+        edge = nil; joining = false
+        SidebarDrag.current = nil
+        guard let provider = info.itemProviders(for: [.utf8PlainText, .plainText]).first else { return false }
+        _ = provider.loadObject(ofClass: NSString.self) { obj, _ in
+            guard let payload = obj as? String else { return }
+            Task { @MainActor in _ = server.handleDrop([payload], onto: window, session: session, edge: e) }
+        }
+        return true
+    }
+}
+
+/// A session header lit while something hovers over it: the drop moves the window to the end
+/// of that session (or breaks a pane out into it).
+private struct SessionDropTarget: ViewModifier {
+    @ObservedObject var server: TmuxModel
+    let session: String
+    @State private var targeted = false
+
+    func body(content: Content) -> some View {
+        content
+            .padding(.horizontal, 4)
+            .background {
+                if targeted {
+                    RoundedRectangle(cornerRadius: 6).fill(Color.accentColor.opacity(0.14))
+                        .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Color.accentColor, lineWidth: 1.5))
+                }
+            }
+            .padding(.horizontal, -4)
+            .animation(.easeOut(duration: 0.12), value: targeted)
+            .dropDestination(for: String.self, action: { ids, _ in
+                server.handleDrop(ids, onto: nil, session: session)
+            }, isTargeted: { targeted = $0 })
+    }
+}
+
+/// What the sidebar is dragging right now. Drop delegates only get the payload on drop, but the
+/// indicator has to know *before* then whether it's a pane (join) or a window (reorder).
+@MainActor
+enum SidebarDrag {
+    static var current: String?
+
+    /// `onDrag` rather than `draggable`: it's the only hook that runs when the drag starts.
+    static func begin(_ tag: String) -> NSItemProvider {
+        current = tag
+        return NSItemProvider(object: tag as NSString)
     }
 }

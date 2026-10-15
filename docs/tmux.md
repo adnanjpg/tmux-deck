@@ -87,6 +87,23 @@ tmux select-pane -t %31 && tmux resize-pane -Z -t %31      # select first: selec
 panes. Zoom is a property of the tmux window, so it's visible to other clients too — that's the
 known trade-off.
 
+## Reordering from the sidebar
+
+Sidebar rows use `.onDrag` (not `.draggable`): it is the only hook that fires when a drag *starts*,
+and `SidebarDrag.current` has to know what is being dragged before the drop, because the drop
+delegate can only read the payload on drop. The row's `WindowDropTarget` shows a line above or
+below the row (top/bottom half of the row, from `DropInfo.location`), or lights the whole row when
+a pane is being dragged, since a pane drop *joins* the window.
+
+- Window onto a window: `tmux move-window -b|-a -s <src> -t <dst>` (before/after; works across
+  sessions). `placeWindow` reorders `sessions` locally first so the row moves at once; the next poll
+  replaces that with tmux's answer.
+- Window onto a session header: `move-window -t session:` (to the end).
+- Pane onto a window: `join-pane -h`; pane onto a header: `break-pane` into that session.
+- Dropping onto a tile in the main area is a different thing: it splits the layout
+  (`SplitLayout.swift`, `DropZone`), which is app-side only. tmux is not involved — each tile is
+  its own grouped client, so nothing in tmux needs configuring for side-by-side tiles.
+
 ## Capturing screens
 
 - `capture-pane -p -t <pane>` — visible screen, plain text.

@@ -1198,7 +1198,13 @@ for pane, pid, path in panes:
     }
 
     /// Drag and drop in the sidebar. `ids` are dragged item ids.
-    func handleDrop(_ ids: [String], onto w: TmuxWindow?, session: String) -> Bool {
+    /// Which half of a sidebar row a drop landed on.
+    enum DropEdge { case top, bottom }
+
+    /// A sidebar drop. `edge` says which half of the row it landed on: a window dropped on the
+    /// top half goes before that window, on the bottom half after it; with no edge (a drop on
+    /// a session header) it goes to the end of `session`. A pane dropped on a window joins it.
+    func handleDrop(_ ids: [String], onto w: TmuxWindow?, session: String, edge: DropEdge? = nil) -> Bool {
         guard var id = ids.first, !id.hasPrefix("tile:") else { return false }
         if let hash = id.firstIndex(of: "#") {
             guard id[..<hash] == host else { return false }   // windows can't move between servers
@@ -1208,13 +1214,32 @@ for pane, pid, path in panes:
         guard let dragged = all.first(where: { $0.id == id }) else { return false }
         if dragged.isPane {
             if let w { joinPane(dragged, into: w) } else { breakPane(dragged, toSession: session) }
-        } else if let w, w.session == dragged.session {
+        } else if let w {
             guard w.windowID != dragged.windowID else { return false }
-            windowAction("tmux swap-window -d -s \(sq(dragged.windowTarget)) -t \(sq(w.windowTarget))")
+            placeWindow(dragged, before: edge != .bottom, target: w)
         } else {
             moveWindow(dragged, toSession: session)
         }
         return true
+    }
+
+    /// Puts `w` just before or after `target`, in whichever session `target` is in. The sidebar
+    /// is reordered at once — a drop that only takes effect on the next poll feels broken — and
+    /// tmux's answer replaces it when it arrives.
+    func placeWindow(_ w: TmuxWindow, before: Bool, target: TmuxWindow) {
+        var updated = sessions
+        if let from = updated.firstIndex(where: { $0.name == w.session }),
+           let fi = updated[from].windows.firstIndex(where: { $0.windowID == w.windowID }) {
+            var moved = updated[from].windows.remove(at: fi)
+            moved.session = target.session
+            if let to = updated.firstIndex(where: { $0.name == target.session }),
+               let ti = updated[to].windows.firstIndex(where: { $0.windowID == target.windowID }) {
+                updated[to].windows.insert(moved, at: before ? ti : ti + 1)
+                for i in updated[to].windows.indices { updated[to].windows[i].index = i }
+                sessions = updated
+            }
+        }
+        windowAction("tmux move-window \(before ? "-b" : "-a") -s \(sq(w.windowTarget)) -t \(sq(target.windowTarget))")
     }
 
     /// A window or pane by its sidebar id.
