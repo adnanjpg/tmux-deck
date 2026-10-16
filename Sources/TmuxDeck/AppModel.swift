@@ -30,6 +30,7 @@ final class AppModel: ObservableObject {
     }
 
     func start() {
+        guard !Bench.enabled else { return }
         MacKeys.install()
         TabSwitcherController.shared.installMonitors()
         Notifications.install()

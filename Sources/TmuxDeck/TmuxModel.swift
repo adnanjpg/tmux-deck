@@ -493,7 +493,11 @@ for pane, pid, path in panes:
         // tmux isn't running over there, which is a different problem from the host being down.
         let noServer = result.stdout.contains("@@NOSERVER") && !result.stdout.contains(Self.sep)
         if noServer != noTmuxServer { noTmuxServer = noServer }
-        Perf.timed("TmuxModel.apply") { apply(result.stdout) }
+        // Splitting the output and reading every Claude screen is the costly part, and it's pure,
+        // so it runs off the main thread; only the comparing and publishing happens here.
+        let stdout = result.stdout
+        let parsed = await Task.detached(priority: .userInitiated) { TmuxModel.parse(stdout) }.value
+        Perf.timed("TmuxModel.apply") { apply(parsed) }
     }
 
     @ObservationIgnored private var toolsChecked = false
@@ -536,19 +540,41 @@ for pane, pid, path in panes:
         return text.isEmpty ? "The connection failed." : text
     }
 
-    private func apply(_ output: String) {
+    /// Everything one poll's output says, worked out off the main thread.
+    struct PollParse: Sendable {
         var captures: [String: [String]] = [:]
         var rows: [[String]] = []
-        var currentCapture: String?
-        var claudeByPane: [String: (info: ClaudeSessionInfo, updated: Double)] = [:]
+        var claudeByPane: [String: ClaudeSessionInfo] = [:]
         var codexByPane: [String: CodexSessionInfo] = [:]
+        var screens: [String: ScreenReading] = [:]
+    }
+
+    /// What a pane's screen says, read once per poll.
+    struct ScreenReading: Sendable {
+        var plain: [String] = []
+        /// The last 12 non-blank lines, which is what `claudeState` looks at.
+        var tail: [String] = []
+        var activity: ClaudeActivity?
+        var footer: [String]?
+        var codexFooter: [String]?
+        var typed = ""
+        var agentList = false
+        var suggestion: String?
+        var options: [PromptOption] = []
+        var question: String?
+    }
+
+    nonisolated static func parse(_ output: String) -> PollParse {
+        var out = PollParse()
+        var currentCapture: String?
+        var updatedByPane: [String: Double] = [:]
         for line in output.split(separator: "\n", omittingEmptySubsequences: false).map(String.init) {
             if line.hasPrefix("@@CODEX ") {
                 let f = line.dropFirst(8).split(separator: " ", maxSplits: 2).map(String.init)
                 if f.count == 3 {
                     let tab = f[2].split(separator: "\t", maxSplits: 1).map(String.init)
-                    codexByPane[f[0]] = CodexSessionInfo(sessionID: f[1], path: tab[0],
-                                                        title: tab.count > 1 ? tab[1] : nil)
+                    out.codexByPane[f[0]] = CodexSessionInfo(sessionID: f[1], path: tab[0],
+                                                            title: tab.count > 1 ? tab[1] : nil)
                 }
                 currentCapture = nil
                 continue
@@ -560,24 +586,48 @@ for pane, pid, path in panes:
                       let pct = tmuxTarget.lastIndex(of: "%") else { continue }
                 let paneID = String(tmuxTarget[pct...])
                 let updated = obj["updatedAt"] as? Double ?? 0
-                if let existing = claudeByPane[paneID], existing.updated > updated { continue }
-                claudeByPane[paneID] = (ClaudeSessionInfo(sessionID: sid, name: obj["name"] as? String,
-                                                              status: obj["status"] as? String,
-                                                              waitingFor: obj["waitingFor"] as? String,
-                                                              updatedAt: updated), updated)
+                if let existing = updatedByPane[paneID], existing > updated { continue }
+                updatedByPane[paneID] = updated
+                out.claudeByPane[paneID] = ClaudeSessionInfo(sessionID: sid, name: obj["name"] as? String,
+                                                             status: obj["status"] as? String,
+                                                             waitingFor: obj["waitingFor"] as? String,
+                                                             updatedAt: updated)
                 currentCapture = nil
                 continue
             }
             if line.hasPrefix("@@CAP ") {
                 currentCapture = String(line.dropFirst(6))
-                captures[currentCapture!] = []
+                out.captures[currentCapture!] = []
             } else if let id = currentCapture {
-                captures[id, default: []].append(line)
-            } else if line.contains(Self.sep) {
-                rows.append(line.components(separatedBy: Self.sep))
+                out.captures[id, default: []].append(line)
+            } else if line.contains(":::") {
+                out.rows.append(line.components(separatedBy: ":::"))
             }
         }
+        for (pane, raw) in out.captures {
+            var r = ScreenReading()
+            r.plain = raw.map(stripANSI)
+            r.tail = Array(r.plain.filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }.suffix(12))
+            r.activity = activity(raw)
+            r.footer = footer(raw)
+            r.codexFooter = codexFooter(raw)
+            r.typed = typedInput(raw)
+            r.agentList = agentListOpen(raw)
+            r.suggestion = suggestion(raw)
+            let promptTail = Array(r.plain.suffix(45))
+            r.options = promptOptions(promptTail)
+            r.question = promptQuestion(promptTail)
+            out.screens[pane] = r
+        }
+        return out
+    }
 
+    private func apply(_ parsed: PollParse) {
+        let captures = parsed.captures
+        let rows = parsed.rows
+        let claudeByPane = parsed.claudeByPane
+        let codexByPane = parsed.codexByPane
+        let screens = parsed.screens
         // Group pane rows into windows.
         var order: [String] = []
         var windowOrder: [String: [String]] = [:]          // session -> window ids
@@ -590,12 +640,12 @@ for pane, pid, path in panes:
                 continue
             }
             let command = f[4], paneID = f[8]
-            let raw = captures[paneID] ?? []
+            let screen = screens[paneID] ?? ScreenReading()
             // Claude's own session record is the source of truth: while Claude runs a
             // build or script, that program is briefly the pane's foreground command,
             // and the window must not flip away from the chat. A record that's missing
             // for one refresh (file mid-write) is bridged for 20 seconds.
-            var claudeInfo = claudeByPane[paneID]?.info
+            var claudeInfo = claudeByPane[paneID]
             let isShell = ["bash", "zsh", "sh", "fish"].contains(command)
             if let info = claudeInfo {
                 lastClaude[paneID] = (info, Date())
@@ -621,10 +671,9 @@ for pane, pid, path in panes:
             }
             let state: WindowState
             if isClaude {
-                let plain = raw.map(stripANSI).filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
-                state = Self.claudeState(Array(plain.suffix(12)), info: claudeInfo)
+                state = Self.claudeState(screen.tail, info: claudeInfo)
             } else if codexInfo != nil || command.contains("codex") {
-                state = Self.codexState(raw.map(stripANSI))
+                state = Self.codexState(screen.plain)
             } else if isShell {
                 state = .shell
             } else {
@@ -665,15 +714,14 @@ for pane, pid, path in panes:
         var newStatusLines: [String: [String]] = [:]
         let allItems = bySession.values.joined().flatMap { [$0] + $0.paneItems }
         for w in allItems where w.state.isClaude {
-            let raw = captures[w.paneID] ?? []
-            if let activity = Self.activity(raw) { newActivities[w.id] = activity }
-            let footer = w.assistant == .codex ? Self.codexFooter(raw) : Self.footer(raw)
+            guard let screen = screens[w.paneID] else { continue }
+            if let activity = screen.activity { newActivities[w.id] = activity }
+            let footer = w.assistant == .codex ? screen.codexFooter : screen.footer
             if let footer { newStatusLines[w.id] = footer }
             if w.state == .claudeNeedsYou {
-                let plainTail = raw.suffix(45).map(stripANSI)
-                options[w.id] = Self.promptOptions(plainTail)
-                questions[w.id] = Self.promptQuestion(plainTail)
-            } else if let suggestion = Self.suggestion(raw) {
+                options[w.id] = screen.options
+                questions[w.id] = screen.question
+            } else if let suggestion = screen.suggestion {
                 newSuggestions[w.id] = suggestion
             }
         }
@@ -681,8 +729,8 @@ for pane, pid, path in panes:
         if questions != promptQuestions { promptQuestions = questions }
         if newSuggestions != suggestions { suggestions = newSuggestions }
         if newActivities != activities { activities = newActivities }
-        recoverStuckMessages(allItems, captures: captures)
-        noticeLeftoverInput(allItems, captures: captures)
+        recoverStuckMessages(allItems, screens: screens)
+        noticeLeftoverInput(allItems, screens: screens)
         // Keep the last good status line for a minute when a read finds none (Claude's
         // screen mid-redraw, or a menu covering it), so the chips don't flicker away.
         let now = Date()
@@ -715,7 +763,7 @@ for pane, pid, path in panes:
     /// Reads a Codex screen. Codex keeps no status file, so the footer is the only signal:
     /// it shows "Working (…  esc to interrupt)" while a turn runs, and an approval prompt
     /// when it needs an answer.
-    static func codexState(_ lines: [String]) -> WindowState {
+    nonisolated static func codexState(_ lines: [String]) -> WindowState {
         let tail = lines.suffix(14).joined(separator: "\n")
         if tail.contains("Allow command") || tail.contains("approve") || tail.contains("[y/n]")
             || tail.contains("Yes, and don't ask") || tail.contains("❯ 1.") {
@@ -728,7 +776,7 @@ for pane, pid, path in panes:
     /// Reads the bottom of a Claude Code screen and guesses what it's doing.
     /// A question on screen wins; otherwise trust the status Claude Code records,
     /// falling back to reading the screen.
-    static func claudeState(_ lines: [String], info: ClaudeSessionInfo?) -> WindowState {
+    nonisolated static func claudeState(_ lines: [String], info: ClaudeSessionInfo?) -> WindowState {
         let text = lines.joined(separator: "\n")
         if text.contains("Do you want") || text.contains("❯ 1.") || text.contains("(y/n)")
             || info?.waitingFor != nil || info?.status == "waiting" || info?.status == "blocked" {
@@ -751,10 +799,10 @@ for pane, pid, path in panes:
     /// If a message you sent is still sitting in Claude's input box, press Enter again
     /// (up to 3 times, 4 seconds apart). If Claude's agent list has focus, Enter would
     /// go there instead, so say so rather than pressing it.
-    private func noticeLeftoverInput(_ items: [TmuxWindow], captures: [String: [String]]) {
+    private func noticeLeftoverInput(_ items: [TmuxWindow], screens: [String: ScreenReading]) {
         var found: [String: String] = [:]
         for w in items where w.assistant == .claude && !w.state.isRunningProgram && w.state != .claudeNeedsYou {
-            let typed = Self.typedInput(captures[w.paneID] ?? [])
+            let typed = screens[w.paneID]?.typed ?? ""
             guard !typed.isEmpty else { continue }
             // Not while one of our own messages is on its way through that box.
             if let sid = w.claude?.sessionID, let store = chatStores[sid],
@@ -772,13 +820,12 @@ for pane, pid, path in panes:
         }
     }
 
-    private func recoverStuckMessages(_ items: [TmuxWindow], captures: [String: [String]]) {
+    private func recoverStuckMessages(_ items: [TmuxWindow], screens: [String: ScreenReading]) {
         var reasons: [UUID: String] = [:]
         for w in items where w.state.isClaude {
             guard let sid = w.claude?.sessionID, let store = chatStores[sid], !store.sending.isEmpty else { continue }
-            let raw = captures[w.paneID] ?? []
-            let typed = Self.typedInput(raw)
-            let agentList = Self.agentListOpen(raw)
+            let typed = screens[w.paneID]?.typed ?? ""
+            let agentList = screens[w.paneID]?.agentList ?? false
             for p in store.sending where Date().timeIntervalSince(p.sentAt) > 6 {
                 guard Self.input(typed, holds: p.text) else { continue }
                 if agentList {
@@ -811,7 +858,7 @@ for pane, pid, path in panes:
     /// bottom rule, without the dim text (the placeholder and the suggestion are dim, typed text
     /// isn't). A long message Claude hands back after Esc wraps over several lines, so stopping
     /// at the first line would lose most of it.
-    static func typedInput(_ rawLines: [String]) -> String {
+    nonisolated static func typedInput(_ rawLines: [String]) -> String {
         guard let start = rawLines.lastIndex(where: { stripANSI($0).trimmingCharacters(in: .whitespaces).hasPrefix("❯") })
         else { return "" }
         // A menu's selected row ("❯ 1. Yes") uses the same marker. That's a cursor, not text you
@@ -829,7 +876,7 @@ for pane, pid, path in panes:
     }
 
     /// The non-dim text of one screen line, optionally only after a marker character.
-    private static func brightText(_ line: String, after marker: Character?) -> String {
+    nonisolated private static func brightText(_ line: String, after marker: Character?) -> String {
         var i = line.startIndex
         if let marker, let m = line.firstIndex(of: marker) { i = line.index(after: m) }
         var dim = false, text = ""
@@ -850,7 +897,7 @@ for pane, pid, path in panes:
     }
 
     /// Claude shows its agent list ("● main", "◯ general-purpose …") under the status line when it has focus.
-    static func agentListOpen(_ rawLines: [String]) -> Bool {
+    nonisolated static func agentListOpen(_ rawLines: [String]) -> Bool {
         (footer(rawLines) ?? []).contains { $0.range(of: #"^\s*[●◯]\s"#, options: .regularExpression) != nil }
     }
 
@@ -862,7 +909,7 @@ for pane, pid, path in panes:
     /// Codex's status line. It doesn't draw Claude's `───` rules around its input box, so the
     /// footer can't be found the same way: it's the last line under the `›` prompt, and it's the
     /// one carrying `·`-separated fields.
-    static func codexFooter(_ rawLines: [String]) -> [String]? {
+    nonisolated static func codexFooter(_ rawLines: [String]) -> [String]? {
         let lines = rawLines.map(stripANSI)
             .map { $0.replacingOccurrences(of: "\u{00a0}", with: " ") }
             .filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
@@ -871,7 +918,7 @@ for pane, pid, path in panes:
         return [line]
     }
 
-    static func footer(_ rawLines: [String]) -> [String]? {
+    nonisolated static func footer(_ rawLines: [String]) -> [String]? {
         let lines = rawLines.map(stripANSI).filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
         let rules = lines.indices.filter { lines[$0].trimmingCharacters(in: .whitespaces).hasPrefix("───") }
         guard rules.count >= 2, let bottom = rules.last, bottom + 1 < lines.count else { return nil }
@@ -880,10 +927,10 @@ for pane, pid, path in panes:
         return footer.isEmpty ? nil : Array(footer)
     }
 
-    private static let spinnerGlyphs: Set<Character> = ["✻", "✽", "✢", "✳", "✶", "✷", "✸", "✹", "✺", "·", "*", "⏺", "●"]
+    nonisolated private static let spinnerGlyphs: Set<Character> = ["✻", "✽", "✢", "✳", "✶", "✷", "✸", "✹", "✺", "·", "*", "⏺", "●"]
 
     /// Finds Claude's status line just above its input box, and the lines under it.
-    static func activity(_ rawLines: [String]) -> ClaudeActivity? {
+    nonisolated static func activity(_ rawLines: [String]) -> ClaudeActivity? {
         let lines = rawLines.map(stripANSI).filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
         let rules = lines.indices.filter { lines[$0].trimmingCharacters(in: .whitespaces).hasPrefix("───") }
         guard rules.count >= 2 else { return nil }
@@ -909,7 +956,7 @@ for pane, pid, path in panes:
     }
 
     /// Claude shows its suggested next message as dim text after the ❯ prompt.
-    static func suggestion(_ rawLines: [String]) -> String? {
+    nonisolated static func suggestion(_ rawLines: [String]) -> String? {
         guard let line = rawLines.last(where: { stripANSI($0).trimmingCharacters(in: .whitespaces).hasPrefix("❯") }),
               let prompt = line.range(of: "❯") else { return nil }
         var dim = false, sawDim = false, sawBright = false
@@ -959,7 +1006,7 @@ for pane, pid, path in panes:
 
     /// Pulls numbered choices like "❯ 1. Yes" out of a Claude permission prompt.
     /// The text just above a numbered choice list: the question being asked.
-    static func promptQuestion(_ lines: [String]) -> String? {
+    nonisolated static func promptQuestion(_ lines: [String]) -> String? {
         let option = try! Regex(#"^[\s│|]*(?:❯\s*)?\d\.\s+"#)
         guard let first = lines.firstIndex(where: { $0.firstMatch(of: option) != nil }) else { return nil }
         var collected: [String] = []
@@ -991,7 +1038,7 @@ for pane, pid, path in panes:
     /// The numbered choices on screen. Lines under a choice (until the next one, a blank, a rule
     /// or the "Enter to select" help) are its explanation — AskUserQuestion prints one per option,
     /// wrapped to the pane width, so they're joined back into a sentence.
-    static func promptOptions(_ lines: [String]) -> [PromptOption] {
+    nonisolated static func promptOptions(_ lines: [String]) -> [PromptOption] {
         let pattern = try! Regex(#"^[\s│|]*(?:❯\s*)?(\d)\.\s+(.+?)[\s│|]*$"#)
         var seen = Set<String>()
         var result: [PromptOption] = []
@@ -1020,7 +1067,7 @@ for pane, pid, path in panes:
     }
 
     /// "Enter to select · Tab/Arrow keys to navigate · Esc to cancel" and friends.
-    static func isPromptHelp(_ line: String) -> Bool {
+    nonisolated static func isPromptHelp(_ line: String) -> Bool {
         let l = line.lowercased()
         return (l.contains("enter to") && (l.contains("select") || l.contains("confirm")))
             || l.contains("to navigate") || l.contains("esc to cancel")

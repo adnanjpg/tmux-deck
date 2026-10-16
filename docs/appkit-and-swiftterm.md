@@ -141,16 +141,28 @@ Notes for anyone touching it:
 
 ## Chat rendering cost
 
-The chat re-renders on every transcript poll and on every tmux refresh (`ChatView` reads
-`TmuxModel` from the environment), so anything done per render is done once a second for
-every visible message. Things that keep scrolling smooth:
+Opening a chat (switching to its window) used to block the main thread for 0.7–1.9 s on large
+conversations, which is what "I click ten times and it doesn't switch" was. Measured with
+`TmuxDeck --bench-chats` (docs/testing.md). The fixes, and the rules that keep it fast:
 
+- **The message list is a `LazyVStack` of small rows.** `ChatLine.lines` flattens each turn into
+  your message, Claude's header, **one row per reply item** (text, tool call, thinking…) and a
+  closing divider; `ChatLineView` draws one. The last 25 turns of a busy session are 600–800 items,
+  mostly tool calls — a plain `VStack` built and measured every one of them on open, and a lazy
+  stack of whole turns still built a 500-tool-call turn as one row and opened on blank space for
+  ~300 ms while it measured. With item rows, opening the eight largest cached chats takes
+  40–140 ms and the first frame has content.
+- `ChatView.onAppear` scrolls to the bottom **immediately** and then again over the next second,
+  because lazy rows settle their heights as they're built.
+- Reply cards are `MessageCard(headerOnly: true)`; their items are separate rows indented by 30.
+  Collapsing a reply drops its item rows from `ChatLine.lines`, so `ChatLine` carries the
+  collapsed flag and rows stay `Equatable`.
 - `MarkdownText.init` is a **cache lookup** (`NSCache` keyed by the message text); the parse,
   including the PR links, runs once per distinct message. The heading regex is static — a
   `try! Regex(...)` inside a per-line loop compiled on every line of every message.
 - `ChatStore.turns` is grouped in `items.didSet`, not in a computed property.
-- `TurnView` is `Equatable` on its `Turn` and rendered with `.equatable()`, so turns that didn't
-  change skip their body.
+- `ChatLineView` is `Equatable` on its line and rendered with `.equatable()`, so rows that didn't
+  change skip their body when the transcript grows.
 - `MessageCard` takes the "copy this turn" text as a closure; building it eagerly meant joining
   every tool result of every visible turn per render.
 - `ChatStore.poll` only assigns `stale`/`missing`/`loaded` when the value changes — assigning a
@@ -208,6 +220,13 @@ What's in place now, and the rules that keep it that way:
   tracked, and the highlight would stop following ⌘1 or tmux's own `select-window`.
 - `AppModel` no longer mirrors server publishes. Views that show per-server state read the server
   (`app.servers.filter(\.connected)`) and are tracked on it directly.
+- **The poll's output is parsed off the main thread.** `TmuxModel.parse` (nonisolated, pure)
+  splits the output, decodes the session records and reads every captured screen into a
+  `ScreenReading` (state tail, activity, status line, typed input, question options…); `apply`
+  on the main actor only builds windows from it and publishes what changed. Reading the screens
+  on the main thread was 25–40 ms per poll — two dropped frames every couple of seconds while
+  scrolling. The screen readers are `nonisolated static`; anything they call must be too.
+  `TmuxDeck --check-poll` prints one poll as the app understood it, for checking them.
 - `Perf` (Perf.swift) logs main-thread work slower than a frame and any quarter-second the main
   thread didn't service its queue; see docs/testing.md, "Profiling lag".
 

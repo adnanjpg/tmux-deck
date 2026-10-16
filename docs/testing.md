@@ -140,4 +140,17 @@ log stream --predicate 'subsystem == "io.github.tmuxdeck"' --style compact
 - `TmuxModel.apply took 40ms`, `ChatStore.poll parse … took 30ms` — `Perf.timed` around the two
   main-thread jobs that run every poll. Wrap any new main-thread work the same way.
 
+Two launch modes measure without the UI (both exit when done; run the debug or release binary
+from `.build/`, not the installed app):
+
+```bash
+.build/release/TmuxDeck --bench-chats 8       # open the 8 largest cached chats off-screen, print ms
+BENCH_PNG=/tmp/shots BENCH_SETTLE=0 .build/release/TmuxDeck --bench-chats 4   # also save the first frame
+.build/debug/TmuxDeck --check-poll            # one read-only poll of each saved server, as parsed
+```
+
+`--bench-chats` contacts no server: it renders `ChatView` from the on-disk transcript cache. Use
+`BENCH_SETTLE=0` screenshots to catch a chat that opens blank. `--check-poll` runs the same
+read-only query the app polls with; its output names your sessions, so keep it out of the repo.
+
 To read what happened earlier (the last hour, say): `log show --last 1h --predicate 'subsystem == "io.github.tmuxdeck"' --style compact`.

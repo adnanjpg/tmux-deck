@@ -42,7 +42,7 @@ struct ChatView: View {
                 // Not lazy: only the last 25 turns render anyway, and a lazy stack whose rows
                 // measure after the fact is what left a bottom-anchored scroll view showing
                 // nothing until the view was rebuilt.
-                VStack(alignment: .leading, spacing: 0) {
+                LazyVStack(alignment: .leading, spacing: 0) {
                     let all = turns
                     if all.count > visibleTurns && !store.searching {
                         Button {
@@ -54,8 +54,12 @@ struct ChatView: View {
                         .frame(maxWidth: .infinity)
                         .padding(.bottom, 8)
                     }
-                    ForEach(store.searching ? all : Array(all.suffix(visibleTurns))) { turn in
-                        TurnView(turn: turn, store: store).equatable()
+                    // One row per message or tool call, not per turn: a turn can hold hundreds of
+                    // tool calls, and as a single lazy row it was built and measured whole — the
+                    // lazy stack couldn't skip it, and opened on blank space while it measured.
+                    ForEach(ChatLine.lines(store.searching ? all : Array(all.suffix(visibleTurns)),
+                                           collapsed: store.collapsed)) { line in
+                        ChatLineView(line: line, store: store).equatable()
                     }
                     // A finished conversation's leftover queue records are history, not a queue.
                     if window != nil {
@@ -79,7 +83,9 @@ struct ChatView: View {
             }
             .defaultScrollAnchor(.bottom)
             .onAppear {
-                // Lazy rows settle their heights over a few frames, so land on the bottom more than once.
+                // Lazy rows settle their heights over a few frames, so land on the bottom more than
+                // once — and once right away, or a long last turn opens on blank space for a frame.
+                proxy.scrollTo("bottom", anchor: .bottom)
                 for delay in [0.05, 0.25, 0.6, 1.2] {
                     DispatchQueue.main.asyncAfter(deadline: .now() + delay) { proxy.scrollTo("bottom", anchor: .bottom) }
                 }
@@ -319,72 +325,126 @@ extension ChatItem {
     }
 }
 
-struct TurnView: View, Equatable {
-    @Environment(\.fonts) private var fonts
-    let turn: Turn
-    @ObservedObject var store: ChatStore
+/// One row of the chat's lazy list. A turn becomes: your message, Claude's header, one row per
+/// reply item, and a closing divider — so only what's on screen is ever built.
+struct ChatLine: Identifiable, Equatable {
+    enum Kind: Equatable {
+        case user(ChatItem, hasReplies: Bool)
+        case replyHeader(summary: String, detail: String, afterUser: Bool)
+        case reply(ChatItem, last: Bool)
+        case end
+    }
+    let id: String
+    let turnID: String
+    let collapsed: Bool
+    let kind: Kind
 
-    static func == (a: TurnView, b: TurnView) -> Bool { a.turn == b.turn && a.store === b.store }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            if let user = turn.user, case .command(let cmd) = user.kind {
-                MessageCard(role: .you, collapsed: binding(user.id), summary: cmd, detail: "command",
-                            copyText: cmd + (user.result.map { "\n" + $0 } ?? ""),
-                            copyTurn: copyTurn, copyAll: copyAll) {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Label(cmd, systemImage: cmd.hasPrefix("!") ? "terminal" : "command")
-                            .font(fonts.monoBody)
-                            .textSelection(.enabled)
-                        if let out = user.result, !out.isEmpty {
-                            Text(out)
-                                .font(fonts.mono)
-                                .foregroundStyle(.secondary)
-                                .textSelection(.enabled)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .padding(10)
-                                .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
-                        }
-                    }
-                }
-            }
-            if let user = turn.user, case .user(let text) = user.kind {
-                MessageCard(role: .you, collapsed: binding(user.id),
-                            summary: text.split(separator: "\n").first.map(String.init) ?? text,
-                            detail: (user.images ?? 0) > 0 ? "\(user.images!) image\(user.images! == 1 ? "" : "s")" : "",
-                            copyText: text, copyTurn: copyTurn, copyAll: copyAll) {
-                    VStack(alignment: .leading, spacing: 8) {
-                        if let n = user.images, n > 0 { ImageBadge(count: n) }
-                        if !text.isEmpty {
-                            Text(text)
-                                .textSelection(.enabled)
-                                .fixedSize(horizontal: false, vertical: true)
-                                .contextMenu { CopyItems(text: text, what: "message") }
-                        }
-                    }
-                }
+    static func lines(_ turns: [Turn], collapsed: Set<String>) -> [ChatLine] {
+        var out: [ChatLine] = []
+        out.reserveCapacity(turns.count * 4)
+        for turn in turns {
+            let tid = turn.id
+            if let user = turn.user {
+                out.append(ChatLine(id: user.id, turnID: tid, collapsed: collapsed.contains(user.id),
+                                    kind: .user(user, hasReplies: !turn.replies.isEmpty)))
             }
             if !turn.replies.isEmpty {
+                let folded = collapsed.contains(turn.replyID)
                 let summary = turn.replySummary
-                MessageCard(role: .assistant(store.assistant), collapsed: binding(turn.replyID),
-                            summary: summary.text, detail: summary.detail,
-                            copyText: turn.replyText(store.assistant),
-                            copyTurn: copyTurn, copyAll: copyAll) {
-                    VStack(alignment: .leading, spacing: 12) {
-                        ForEach(turn.replies) { ChatRow(item: $0) }
+                out.append(ChatLine(id: turn.replyID, turnID: tid, collapsed: folded,
+                                    kind: .replyHeader(summary: summary.text, detail: summary.detail,
+                                                       afterUser: turn.user != nil)))
+                if !folded {
+                    for (i, item) in turn.replies.enumerated() {
+                        out.append(ChatLine(id: "r-" + item.id, turnID: tid, collapsed: false,
+                                            kind: .reply(item, last: i == turn.replies.count - 1)))
+                    }
+                }
+            }
+            out.append(ChatLine(id: "end-" + tid, turnID: tid, collapsed: false, kind: .end))
+        }
+        return out
+    }
+}
+
+/// Draws one `ChatLine`. Equatable on the line, so rows that didn't change skip their body when
+/// the transcript grows.
+struct ChatLineView: View, Equatable {
+    @Environment(\.fonts) private var fonts
+    let line: ChatLine
+    let store: ChatStore
+
+    static func == (a: ChatLineView, b: ChatLineView) -> Bool { a.line == b.line && a.store === b.store }
+
+    var body: some View {
+        switch line.kind {
+        case .user(let user, let hasReplies):
+            userCard(user)
+                .padding(.top, 14)
+                .padding(.bottom, hasReplies ? 12 : 0)
+        case .replyHeader(let summary, let detail, let afterUser):
+            MessageCard(role: .assistant(store.assistant), collapsed: binding(line.id),
+                        summary: summary, detail: detail, headerOnly: true,
+                        copyText: turn?.replyText(store.assistant),
+                        copyTurn: copyTurn, copyAll: copyAll) { EmptyView() }
+                .padding(.top, afterUser ? 0 : 14)
+                .padding(.bottom, line.collapsed ? 0 : 10)
+        case .reply(let item, let last):
+            ChatRow(item: item)
+                .padding(.leading, 30)
+                .padding(.bottom, last ? 0 : 12)
+        case .end:
+            Color.clear.frame(height: 14)
+                .frame(maxWidth: .infinity)
+                .overlay(alignment: .bottom) { Divider().opacity(0.6) }
+        }
+    }
+
+    @ViewBuilder private func userCard(_ user: ChatItem) -> some View {
+        if case .command(let cmd) = user.kind {
+            MessageCard(role: .you, collapsed: binding(user.id), summary: cmd, detail: "command",
+                        copyText: cmd + (user.result.map { "\n" + $0 } ?? ""),
+                        copyTurn: copyTurn, copyAll: copyAll) {
+                VStack(alignment: .leading, spacing: 8) {
+                    Label(cmd, systemImage: cmd.hasPrefix("!") ? "terminal" : "command")
+                        .font(fonts.monoBody)
+                        .textSelection(.enabled)
+                    if let out = user.result, !out.isEmpty {
+                        Text(out)
+                            .font(fonts.mono)
+                            .foregroundStyle(.secondary)
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(10)
+                            .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
+                    }
+                }
+            }
+        } else if case .user(let text) = user.kind {
+            MessageCard(role: .you, collapsed: binding(user.id),
+                        summary: text.split(separator: "\n").first.map(String.init) ?? text,
+                        detail: (user.images ?? 0) > 0 ? "\(user.images!) image\(user.images! == 1 ? "" : "s")" : "",
+                        copyText: text, copyTurn: copyTurn, copyAll: copyAll) {
+                VStack(alignment: .leading, spacing: 8) {
+                    if let n = user.images, n > 0 { ImageBadge(count: n) }
+                    if !text.isEmpty {
+                        Text(text)
+                            .textSelection(.enabled)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .contextMenu { CopyItems(text: text, what: "message") }
                     }
                 }
             }
         }
-        .padding(.vertical, 14)
-        .overlay(alignment: .bottom) { Divider().opacity(0.6) }
     }
+
+    private var turn: Turn? { store.turns.last { $0.id == line.turnID } }
 
     private func copyAll() -> String {
         store.turns.map { $0.asText(store.assistant) }.joined(separator: "\n\n---\n\n")
     }
 
-    private func copyTurn() -> String { turn.asText(store.assistant) }
+    private func copyTurn() -> String { turn?.asText(store.assistant) ?? "" }
 
     private func binding(_ id: String) -> Binding<Bool> {
         Binding(get: { store.collapsed.contains(id) },
@@ -413,6 +473,8 @@ struct MessageCard<Content: View>: View {
     @Binding var collapsed: Bool
     let summary: String
     let detail: String
+    /// The chat draws Claude's reply items as their own rows under the header.
+    var headerOnly = false
     /// What "Copy message" copies. A menu in the header rather than a context menu over the
     /// body: a contextMenu on a container swallows the drag that starts a text selection.
     var copyText: String?
@@ -451,7 +513,7 @@ struct MessageCard<Content: View>: View {
                 copyMenu.offset(x: -18)
             }
 
-            if !collapsed {
+            if !collapsed && !headerOnly {
                 content
                     .padding(.leading, 30)
                     .transition(.opacity)

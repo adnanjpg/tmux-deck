@@ -154,6 +154,7 @@ struct RootView: View {
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
+        if Bench.enabled { MainActor.assumeIsolated { Bench.run() } }
         NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
         _ = UpdateWatcher.shared
