@@ -140,11 +140,11 @@ struct RootView: View {
         Group {
             if let server = app.activeServer {
                 ContentView()
-                    .environmentObject(server)
+                    .environment(server)
             } else if plainStore.enabled {
                 // Plain terminals only: the tmux menus act on a stand-in for this Mac.
                 ContentView()
-                    .environmentObject(app.localStandIn)
+                    .environment(app.localStandIn)
             } else {
                 AddServerView()
             }
@@ -157,6 +157,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
         _ = UpdateWatcher.shared
+        Perf.startWatchdog()
         // Make sure the main window can go full screen (green button, ⌃⌘F).
         NotificationCenter.default.addObserver(forName: NSWindow.didBecomeKeyNotification, object: nil, queue: .main) { note in
             (note.object as? NSWindow)?.collectionBehavior.insert(.fullScreenPrimary)

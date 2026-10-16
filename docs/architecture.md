@@ -35,7 +35,10 @@ Singletons (all `@MainActor`, all `ObservableObject`):
 | `PRStore.shared` | PullRequests.swift | GitHub PR data via `gh` |
 | `UpdateWatcher.shared` | UpdateWatcher.swift | "a newer build is installed" banner |
 
-One `TmuxModel` exists per server (not a singleton). `AppModel.shared.servers` holds them.
+One `TmuxModel` exists per server (not a singleton). `AppModel.shared.servers` holds them. It is
+the one `@Observable` (Observation framework) model, not an `ObservableObject`: views read it with
+`@Environment(TmuxModel.self)` and only re-render for the properties they actually read. See
+"Who re-renders when the server polls" in [appkit-and-swiftterm.md](appkit-and-swiftterm.md).
 
 ## Tags: how a tile knows what to show
 

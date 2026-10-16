@@ -36,6 +36,7 @@ struct ChatView: View {
                 .overlay(alignment: .bottom) { Divider() }
             }
             if store.searching { searchBar }
+            if window != nil { ConnectionBanner() }
             ScrollViewReader { proxy in
             ScrollView {
                 // Not lazy: only the last 25 turns render anyway, and a lazy stack whose rows
@@ -143,6 +144,29 @@ struct ChatView: View {
                 try? await Task.sleep(for: .seconds(window?.state == .claudeWorking ? 1 : 2))
                 await store.poll()
             }
+        }
+    }
+}
+
+/// "What you see is what was loaded": the chat stays readable from its on-disk copy while the
+/// server is away, and this says so. Its own view so only it re-renders when the link changes.
+private struct ConnectionBanner: View {
+    @Environment(TmuxModel.self) private var model
+    @Environment(\.fonts) private var fonts
+
+    var body: some View {
+        if !model.connected {
+            HStack(spacing: 8) {
+                ProgressView().controlSize(.small)
+                Text(model.lastError == nil ? "Reconnecting to \(model.displayName)… showing what was loaded"
+                                            : "Not up to date — \(model.lastError ?? "")")
+                    .font(fonts.caption).foregroundStyle(.secondary)
+                Spacer(minLength: 4)
+                Button("Retry") { model.retryNow() }.buttonStyle(.borderless).font(fonts.caption)
+            }
+            .padding(.horizontal, 16).padding(.vertical, 6)
+            .background(Color.orange.opacity(0.10))
+            .overlay(alignment: .bottom) { Divider() }
         }
     }
 }
@@ -489,7 +513,7 @@ struct MessageCard<Content: View>: View {
 /// If it gets stuck, it says why and offers a fix.
 struct SendingMessage: View {
     @Environment(\.fonts) private var fonts
-    @EnvironmentObject private var model: TmuxModel
+    @Environment(TmuxModel.self) private var model
     let message: PendingMessage
     let window: TmuxWindow
     @ObservedObject var store: ChatStore
@@ -635,7 +659,7 @@ struct ChatRow: View {
 /// above it doesn't have to.
 struct LiveActivity: View {
     @Environment(\.theme) private var theme
-    @EnvironmentObject private var model: TmuxModel
+    @Environment(TmuxModel.self) private var model
     let window: TmuxWindow
     let assistant: CodingAssistant
 
@@ -661,7 +685,7 @@ struct LiveActivity: View {
 
 /// The header's state badge; it needs "finished while you were away", which lives in the model.
 struct HeaderBadge: View {
-    @EnvironmentObject private var model: TmuxModel
+    @Environment(TmuxModel.self) private var model
     let window: TmuxWindow
 
     var body: some View {

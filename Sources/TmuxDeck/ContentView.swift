@@ -4,7 +4,7 @@ import SwiftUI
 struct ContentView: View {
     @Environment(\.fonts) private var fonts
     @Environment(\.theme) private var theme
-    @EnvironmentObject private var model: TmuxModel
+    @Environment(TmuxModel.self) private var model
     @State private var renaming: RenameTarget?
     @State private var renameText = ""
     @State private var closing: TmuxWindow?
@@ -182,8 +182,11 @@ struct ContentView: View {
     // MARK: Sidebar
 
     private var sidebar: some View {
-        List(selection: Binding(get: { layout.focusedTag ?? app.selectionTag },
-                                set: { if let t = $0 { layout.show(t) } })) {
+        // Read here, in the body, so the list follows a selection made from the keyboard or by
+        // tmux itself: a read inside the binding's getter isn't tracked by Observation.
+        let selected = layout.focusedTag ?? app.selectionTag
+        return List(selection: Binding(get: { selected },
+                                       set: { if let t = $0 { layout.show(t) } })) {
             if plain.enabled || !plain.terminals.isEmpty {
                 Section(isExpanded: isExpanded("plain")) {
                     ForEach(plain.terminals(on: Remote.localHost)) { t in
@@ -596,7 +599,7 @@ struct ContentView: View {
             }
         } else if let tag, let (server, window) = TileResolver.resolve(tag) {
             windowContent(server: server, window: window, tile: leafID)
-                .environmentObject(server)
+                .environment(server)
         } else if let tag, let hash = tag.firstIndex(of: "#"),
                   let server = app.server(String(tag[..<hash])), !server.connected {
             ProgressView("Connecting to \(server.displayName)…").frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -903,7 +906,7 @@ struct AddServerView: View {
 /// A server's heading in the sidebar: its name, connection, port forwarding and menu.
 struct ServerHeader: View {
     @Environment(\.fonts) private var fonts
-    @ObservedObject var server: TmuxModel
+    var server: TmuxModel
     @ObservedObject var forwarder: PortForwarder
     let showName: Bool
     var onNewSession: () -> Void
@@ -1107,7 +1110,7 @@ struct PortsView: View {
 /// Pick which lost windows to bring back.
 struct RestoreView: View {
     @Environment(\.fonts) private var fonts
-    @ObservedObject var server: TmuxModel
+    var server: TmuxModel
     @Environment(\.dismiss) private var dismiss
     @State private var candidates: [TmuxModel.SavedWindow]?
     @State private var chosen: Set<String> = []
@@ -1237,7 +1240,7 @@ struct StateBadge: View {
 /// Where a dragged window would land on this row: a line above or below it, or the whole row
 /// lit when a pane is being joined into it. Without this the drop was a guess.
 private struct WindowDropTarget: ViewModifier {
-    @ObservedObject var server: TmuxModel
+    var server: TmuxModel
     let window: TmuxWindow
     let session: String
     @State private var edge: TmuxModel.DropEdge?
@@ -1320,7 +1323,7 @@ private struct WindowRowDrop: DropDelegate {
 /// A session header lit while something hovers over it: the drop moves the window to the end
 /// of that session (or breaks a pane out into it).
 private struct SessionDropTarget: ViewModifier {
-    @ObservedObject var server: TmuxModel
+    var server: TmuxModel
     let session: String
     @State private var targeted = false
 

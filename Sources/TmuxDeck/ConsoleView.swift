@@ -6,7 +6,7 @@ import SwiftUI
 struct ConsoleView: View {
     @Environment(\.theme) private var theme
     @Environment(\.fonts) private var fonts
-    @EnvironmentObject private var model: TmuxModel
+    @Environment(TmuxModel.self) private var model
     let window: TmuxWindow
     @State private var output = ""
 

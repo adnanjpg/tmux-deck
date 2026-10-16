@@ -123,4 +123,21 @@ over the whole file mixes them in — a blocking `gh` read on a cooperative-pool
 like a 5-second main-thread stall that way. On the main thread, `mach_msg` under
 `__CFRunLoopServiceMachPort` is idle; `__CFRunLoopDoObservers` → `ViewRendererHost.updateViewGraph`
 is SwiftUI work, and `StackLayout`/`LayoutEngineBox` frames under it mean a big stack is being
-re-measured. App frames (`(in TmuxDeck)`) name the body that caused it.
+re-measured. App frames (`(in TmuxDeck)`) name the body that caused it. A sample that is mostly
+`AG::Graph::update_attribute` / `propagate_dirty` / `find1` with **no** app frames means the graph
+is being invalidated too often, not that any body is slow — look for who publishes (see "Who
+re-renders when the server polls" in appkit-and-swiftterm.md).
+
+The app also keeps its own timings. Nothing is logged while things are fine; when they aren't:
+
+```bash
+log stream --predicate 'subsystem == "io.github.tmuxdeck"' --style compact
+```
+
+- `main thread was busy for 812ms` — the watchdog (`Perf.startWatchdog`) pings the main queue
+  every 250 ms from a background thread and reports when the answer came late. This is what a
+  click that "didn't take" looks like from the inside; the timestamps say when.
+- `TmuxModel.apply took 40ms`, `ChatStore.poll parse … took 30ms` — `Perf.timed` around the two
+  main-thread jobs that run every poll. Wrap any new main-thread work the same way.
+
+To read what happened earlier (the last hour, say): `log show --last 1h --predicate 'subsystem == "io.github.tmuxdeck"' --style compact`.

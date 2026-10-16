@@ -8,7 +8,7 @@ import SwiftUI
 struct ComposeBar: View {
     @Environment(\.fonts) private var fonts
     @Environment(\.theme) private var theme
-    @EnvironmentObject private var model: TmuxModel
+    @Environment(TmuxModel.self) private var model
     let window: TmuxWindow
     @State private var text = ""
     @State private var height: CGFloat = 22
@@ -573,7 +573,7 @@ final class ComposeNSTextView: NSTextView {
 /// explanation, your own answer, and "Chat about this".
 struct QuestionCard: View {
     @Environment(\.fonts) private var fonts
-    @EnvironmentObject private var model: TmuxModel
+    @Environment(TmuxModel.self) private var model
     let questions: [AskQuestion]
     let screenOptions: [PromptOption]
     let window: TmuxWindow

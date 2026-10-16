@@ -369,7 +369,7 @@ struct PRChip: View {
 
 /// Picks the panel's inputs from the window on screen: its repository and the PRs its chat mentions.
 struct PRPanelHost: View {
-    @EnvironmentObject private var model: TmuxModel
+    @Environment(TmuxModel.self) private var model
     @State private var repo: String?
     @State private var repoPath: String?
 

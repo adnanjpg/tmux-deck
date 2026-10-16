@@ -202,11 +202,15 @@ final class ChatStore: ObservableObject {
         }
         // Assigning a @Published the value it already has still re-renders the whole chat.
         if stale != nil { stale = nil }
+        Perf.timed("ChatStore.poll parse \(sessionID.prefix(8))") { ingest(result.stdout, startOffset: startOffset) }
+    }
+
+    private func ingest(_ stdout: String, startOffset: Int) {
         var fresh: [ChatItem] = []
         var working = items
         var queue = queued
         var enqueued: [String] = []
-        for line in result.stdout.split(separator: "\n") {
+        for line in stdout.split(separator: "\n") {
             guard let obj = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any],
                   let k = obj["k"] as? String else { continue }
             let id = obj["id"] as? String ?? UUID().uuidString

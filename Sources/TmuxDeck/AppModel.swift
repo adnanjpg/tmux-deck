@@ -13,7 +13,6 @@ final class AppModel: ObservableObject {
     @Published var activeHost: String?
     @Published private(set) var forwarders: [String: PortForwarder] = [:]
 
-    private var observers: [String: AnyCancellable] = [:]
     /// Used when you only have plain terminals (no tmux servers) so the window still has a model.
     lazy var localStandIn = TmuxModel(host: Remote.localHost)
 
@@ -54,7 +53,6 @@ final class AppModel: ObservableObject {
     func removeServer(_ host: String) {
         forwarders[host]?.stop()
         forwarders[host] = nil
-        observers[host] = nil
         servers.first { $0.host == host }?.stop()
         servers.removeAll { $0.host == host }
         if activeHost == host { activeHost = servers.first?.host }
@@ -72,8 +70,6 @@ final class AppModel: ObservableObject {
     private func attach(_ host: String) {
         let model = TmuxModel(host: host)
         model.onRefresh = { [weak self] in self?.updateBadge() }
-        // Re-render the sidebar when any server changes, not just the active one.
-        observers[host] = model.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
         servers.append(model)
         let forwarder = PortForwarder(host: host)
         forwarder.onChange = { [weak self] in self?.objectWillChange.send() }

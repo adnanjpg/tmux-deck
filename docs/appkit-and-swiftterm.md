@@ -156,9 +156,9 @@ every visible message. Things that keep scrolling smooth:
 - `ChatStore.poll` only assigns `stale`/`missing`/`loaded` when the value changes — assigning a
   `@Published` the same value still fires `objectWillChange`.
 - `PRPanelForChat` scans the transcript for PR mentions in `onChange(of: store.items)`, not in `body`.
-- `ChatView` does **not** observe `TmuxModel`. The model publishes about once a second, and the
-  chat owns the biggest layout in the app; the bits that need live state (`LiveActivity`,
-  `HeaderBadge`, `SendingMessage`) are small child views with their own `@EnvironmentObject`.
+- `ChatView` reads almost nothing from `TmuxModel`; the bits that need live state (`LiveActivity`,
+  `HeaderBadge`, `SendingMessage`, `ConnectionBanner`) are small child views that read it
+  themselves, so the chat's big stack isn't invalidated by the status line ticking.
 - Claude's status line (`ActivityView`) sits **below** the scroll view, not at the end of the message
   stack. Its text changes every second while Claude works and its glyph runs a `phaseAnimator`; a
   child that changes size inside a plain `VStack` of hundreds of rows makes SwiftUI re-measure all
@@ -168,6 +168,48 @@ every visible message. Things that keep scrolling smooth:
   view; while `AppFont` wasn't Equatable, SwiftUI took it as changed on every `RootView` render
   (which happens whenever `AppModel`, the theme store or the plain-terminal store publish) and
   invalidated the whole window — that was the scroll lag after zoom went window-wide.
+
+## Who re-renders when the server polls
+
+`TmuxModel` polls tmux every two seconds and reads every Claude screen. The app was "laggy since
+yesterday" (clicks on the sidebar not taking, scroll stuttering) because of what happened after
+each poll, not the poll itself. A 5-second `sample` of the idle app showed the main thread ~65%
+busy inside SwiftUI graph updates with no app code on the stack: the whole window was being
+re-diffed several times a second. The chain was:
+
+1. `TmuxModel` was an `ObservableObject`. Any `@Published` write — including `connected = true`
+   and `lastError = nil` written **unconditionally** on every successful poll, and `activities`
+   (Claude's spinner text) every poll while anything worked — fired `objectWillChange` for every
+   view holding it as `@EnvironmentObject`: `ContentView` (sidebar list, toolbar, title, every
+   dialog), `ComposeBar`, `StatusBar`, …
+2. `TmuxWindow ==` compared `ClaudeSessionInfo.updatedAt`, which Claude bumps every few seconds
+   while working, so `sessions` was republished on most polls too.
+3. `AppModel` mirrored every server's `objectWillChange` into its own ("re-render the sidebar when
+   any server changes"). `RootView` observes `AppModel`, so each server publish re-rendered the
+   root — `AppGraph.graphDidChange` → `updateRootView` → preference re-evaluation for the whole
+   window — on top of everything in step 1.
+
+What's in place now, and the rules that keep it that way:
+
+- **`TmuxModel` is `@Observable`** (Observation, macOS 14). Views take it with
+  `@Environment(TmuxModel.self) private var model` (never `@EnvironmentObject`, which doesn't
+  compile against it) and are injected with `.environment(server)`. A view re-renders only when a
+  property it read during `body` changes: the sidebar on `sessions`/`selection`, `LiveActivity` on
+  `activities`, `StatusBar` on `statusLines`.
+- **Internal caches are `@ObservationIgnored`** (`chatStores`, `terminals`, `lastClaude`, poll
+  bookkeeping…). Without that, `chatStore(for:)` — called from a view body — would write a tracked
+  property during rendering and re-invalidate the view that called it. Any new stored property
+  that isn't UI state gets the attribute.
+- **Write only on change.** With Observation, assigning a property the value it already has still
+  notifies readers. `refresh()` and `apply()` compare before assigning (`if !connected { … }`).
+- **`ClaudeSessionInfo ==` ignores `updatedAt`.** It still feeds `recordAge` at poll time.
+- **Read tracked state in `body`, not in a `Binding` getter.** The sidebar's selection is computed
+  into a local before the `List(selection:)` binding is built; a read inside the getter isn't
+  tracked, and the highlight would stop following ⌘1 or tmux's own `select-window`.
+- `AppModel` no longer mirrors server publishes. Views that show per-server state read the server
+  (`app.servers.filter(\.connected)`) and are tracked on it directly.
+- `Perf` (Perf.swift) logs main-thread work slower than a frame and any quarter-second the main
+  thread didn't service its queue; see docs/testing.md, "Profiling lag".
 
 ## Text size
 

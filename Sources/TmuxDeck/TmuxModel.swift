@@ -1,6 +1,7 @@
 import AppKit
 import AudioToolbox
 import Foundation
+import Observation
 import UserNotifications
 
 /// Coding CLIs that Tmux Deck can start in a tmux or plain-terminal window.
@@ -133,6 +134,14 @@ struct ClaudeSessionInfo: Hashable {
     var updatedAt: Double = 0
 
     var recordAge: TimeInterval { Date().timeIntervalSince1970 - updatedAt / 1000 }
+
+    /// `updatedAt` moves every few seconds while Claude works. It feeds the state read at poll
+    /// time, but it is not part of equality: if it were, `sessions` would be republished on
+    /// every poll and the whole window re-rendered for nothing.
+    static func == (a: ClaudeSessionInfo, b: ClaudeSessionInfo) -> Bool {
+        a.sessionID == b.sessionID && a.name == b.name && a.status == b.status && a.waitingFor == b.waitingFor
+    }
+    func hash(into hasher: inout Hasher) { hasher.combine(sessionID) }
 }
 
 /// Claude's live status line from its screen, e.g. "Thinking… (1m 3s · ↓ 2.3k tokens)",
@@ -169,47 +178,49 @@ let viewSessionPrefix = "deck-"
 /// Everything the app knows about one server: its tmux sessions, Claude
 /// conversations and terminals. `AppModel` holds one of these per server.
 @MainActor
-final class TmuxModel: ObservableObject, Identifiable {
+@Observable
+final class TmuxModel: Identifiable {
     let remote: Remote
     var host: String { remote.host }
     /// What to call this server in the UI ("This Mac" for the local machine).
     var displayName: String { remote.displayName }
     nonisolated var id: String { remote.host }
     /// Called after each refresh so the app can update the Dock badge across servers.
-    var onRefresh: (() -> Void)?
+    @ObservationIgnored var onRefresh: (() -> Void)?
 
     init(host: String) {
         self.remote = Remote(host: host)
+        pinned = Set(UserDefaults.standard.array(forKey: "pinned.\(host)") as? [String] ?? [])
     }
 
-    @Published var sessions: [TmuxSession] = []
-    @Published var selection: TmuxWindow.ID?
-    @Published var connected = false
-    @Published var lastError: String?
-    @Published var toast: String?
+    var sessions: [TmuxSession] = []
+    var selection: TmuxWindow.ID?
+    var connected = false
+    var lastError: String?
+    var toast: String?
     /// Choices Claude is currently offering in each window, e.g. ["1": "Yes", "2": "No"].
-    @Published var promptOptions: [String: [PromptOption]] = [:]
+    var promptOptions: [String: [PromptOption]] = [:]
     /// The question text above those choices (e.g. "Do you want to make this edit to X?").
-    @Published var promptQuestions: [String: String] = [:]
+    var promptQuestions: [String: String] = [:]
     /// Claude's own suggestion for the next message (the dim text in its input line).
-    @Published var suggestions: [String: String] = [:]
+    var suggestions: [String: String] = [:]
     /// The lines under Claude's input box (its status line, mode, hints) per item.
-    @Published var statusLines: [String: [String]] = [:]
+    var statusLines: [String: [String]] = [:]
     /// Claude's live status line per item.
-    @Published var activities: [String: ClaudeActivity] = [:]
+    var activities: [String: ClaudeActivity] = [:]
     /// Conversation titles Claude generated, by session id.
-    @Published var titles: [String: String] = [:]
+    var titles: [String: String] = [:]
     /// Windows the person switched to the raw terminal view.
-    @Published var rawTerminal: Set<String> = []
+    var rawTerminal: Set<String> = []
     /// Text sitting in a Claude window's input box that didn't come from the app — what Claude
     /// hands back when you press Esc, or something typed in the terminal view. The message box
     /// adopts it, so there's one place your unsent text lives rather than two that disagree.
-    @Published private(set) var leftoverInput: [String: String] = [:]
+    private(set) var leftoverInput: [String: String] = [:]
     /// The host answered, but there's no tmux server running on it.
-    @Published private(set) var noTmuxServer = false
+    private(set) var noTmuxServer = false
     /// Tools this server is missing. python3 is the one that matters: without it there's no
     /// chat view at all, and before this the failure was silent.
-    @Published private(set) var missingTools: [String] = []
+    private(set) var missingTools: [String] = []
     /// Unsent text in each window's message box.
     /// Unsent text per window, kept across quits — losing a half-written message because you
     /// closed the app is the kind of small betrayal you remember.
@@ -218,20 +229,20 @@ final class TmuxModel: ObservableObject, Identifiable {
         set { UserDefaults.standard.set(newValue, forKey: "drafts.\(host)") }
     }
 
-    private(set) var needsYouCount = 0
-    private var lastClaude: [String: (ClaudeSessionInfo, Date)] = [:]
-    private var lastStatus: [String: ([String], Date)] = [:]
+    @ObservationIgnored private(set) var needsYouCount = 0
+    @ObservationIgnored private var lastClaude: [String: (ClaudeSessionInfo, Date)] = [:]
+    @ObservationIgnored private var lastStatus: [String: ([String], Date)] = [:]
     /// Claude windows that finished while you weren't looking at them ("Done" until opened).
-    @Published var unseenDone: Set<String> = []
+    var unseenDone: Set<String> = []
     /// Why a sent message looks stuck, by pending message id (shown on the message).
-    @Published var stuckReasons: [UUID: String] = [:]
-    private var autoEnter: [UUID: (count: Int, last: Date)] = [:]
-    private var terminals: [String: TerminalController] = [:]
-    private var chatStores: [String: ChatStore] = [:]
-    private var prefetched = Set<String>()
-    private var pollTask: Task<Void, Never>?
-    private var lastUserSelection = Date.distantPast
-    private var previousStates: [String: WindowState] = [:]
+    var stuckReasons: [UUID: String] = [:]
+    @ObservationIgnored private var autoEnter: [UUID: (count: Int, last: Date)] = [:]
+    @ObservationIgnored private var terminals: [String: TerminalController] = [:]
+    @ObservationIgnored private var chatStores: [String: ChatStore] = [:]
+    @ObservationIgnored private var prefetched = Set<String>()
+    @ObservationIgnored private var pollTask: Task<Void, Never>?
+    @ObservationIgnored private var lastUserSelection = Date.distantPast
+    @ObservationIgnored private var previousStates: [String: WindowState] = [:]
 
     var selectedWindow: TmuxWindow? {
         guard let selection else { return nil }
@@ -245,7 +256,7 @@ final class TmuxModel: ObservableObject, Identifiable {
     /// How long to wait before the next poll. Two seconds while the server answers; after a
     /// failure it backs off, because a dead host was otherwise being hit every two seconds with
     /// a connection that takes fifteen to time out — several in flight at once, forever.
-    private var pollDelay: Double = 2
+    @ObservationIgnored private var pollDelay: Double = 2
     private static let maxPollDelay: Double = 30
 
     func start() {
@@ -469,24 +480,23 @@ for pane, pid, path in panes:
     func refresh() async {
         let result = await remote.run(Self.pollScript)
         guard result.ok else {
-            connected = false
-            lastError = Self.describe(result)
+            if connected { connected = false }
+            let error = Self.describe(result)
+            if lastError != error { lastError = error }
             pollDelay = min(pollDelay * 1.6, Self.maxPollDelay)
             return
         }
-        connected = true
-        lastError = nil
+        // Every write to an observed property re-renders what reads it, so only write changes.
+        if !connected { connected = true }
+        if lastError != nil { lastError = nil }
         pollDelay = 2
         // tmux isn't running over there, which is a different problem from the host being down.
-        if result.stdout.contains("@@NOSERVER") && !result.stdout.contains(Self.sep) {
-            noTmuxServer = true
-        } else {
-            noTmuxServer = false
-        }
-        apply(result.stdout)
+        let noServer = result.stdout.contains("@@NOSERVER") && !result.stdout.contains(Self.sep)
+        if noServer != noTmuxServer { noTmuxServer = noServer }
+        Perf.timed("TmuxModel.apply") { apply(result.stdout) }
     }
 
-    private var toolsChecked = false
+    @ObservationIgnored private var toolsChecked = false
 
     /// What's installed over there. Checked once per connection, not every poll.
     ///
@@ -925,7 +935,7 @@ for pane, pid, path in panes:
         return sawDim && !sawBright && !trimmed.isEmpty ? trimmed : nil
     }
 
-    private var titleFetched: [String: Date] = [:]
+    @ObservationIgnored private var titleFetched: [String: Date] = [:]
 
     /// Reads the AI-generated title of each conversation, refreshing every minute.
     func fetchMissingTitles(_ ids: [String]) {
@@ -1016,8 +1026,8 @@ for pane, pid, path in panes:
             || l.contains("to navigate") || l.contains("esc to cancel")
     }
 
-    private var lastViewActive: [String: String] = [:]
-    private var lastCodex: [String: (CodexSessionInfo, Date)] = [:]
+    @ObservationIgnored private var lastViewActive: [String: String] = [:]
+    @ObservationIgnored private var lastCodex: [String: (CodexSessionInfo, Date)] = [:]
 
     /// The terminal of the focused tile, when that tile is showing `session`. Only the tile
     /// you're looking at should be able to drag the sidebar selection around.
@@ -1103,7 +1113,7 @@ for pane, pid, path in panes:
         return w.title
     }
 
-    private var repoByPath: [String: String?] = [:]
+    @ObservationIgnored private var repoByPath: [String: String?] = [:]
 
     /// The GitHub "owner/name" of the git repository at `path` on this server, if any.
     func repository(for path: String) async -> String? {
@@ -1520,9 +1530,9 @@ for pane, pid, path in panes:
 
     private var pinKey: String { "pinned.\(host)" }
 
-    var pinned: Set<String> {
-        get { Set(UserDefaults.standard.array(forKey: pinKey) as? [String] ?? []) }
-        set { UserDefaults.standard.set(Array(newValue), forKey: pinKey) }
+    /// Stored (not read from UserDefaults on each access) so views that show the pin follow it.
+    private(set) var pinned: Set<String> = [] {
+        didSet { UserDefaults.standard.set(Array(pinned), forKey: pinKey) }
     }
 
     func isPinned(_ w: TmuxWindow) -> Bool { pinned.contains(w.id) }
@@ -1531,7 +1541,6 @@ for pane, pid, path in panes:
         var all = pinned
         if all.contains(w.id) { all.remove(w.id) } else { all.insert(w.id) }
         pinned = all
-        objectWillChange.send()
     }
 
     func close(_ w: TmuxWindow) {

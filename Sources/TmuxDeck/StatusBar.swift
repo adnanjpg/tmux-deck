@@ -187,7 +187,7 @@ struct StatusChip: Identifiable, Hashable {
 /// Claude Code's status line as native chips under the input box.
 struct StatusBar: View {
     @Environment(\.fonts) private var fonts
-    @EnvironmentObject private var model: TmuxModel
+    @Environment(TmuxModel.self) private var model
     let window: TmuxWindow
     @AppStorage("statusbar.version") private var refresh = 0   // bumps when toggles change
     @State private var customizing = false
@@ -232,7 +232,7 @@ struct StatusBar: View {
 /// One chip in the status bar. Most chips open a menu or a details popover.
 private struct ChipView: View {
     @Environment(\.fonts) private var fonts
-    @EnvironmentObject private var model: TmuxModel
+    @Environment(TmuxModel.self) private var model
     let chip: StatusChip
     let window: TmuxWindow
     @State private var open = false
@@ -486,7 +486,7 @@ struct ModelPicker: View {
 /// Usage gauges from the status line, plus Claude's full /usage screen on request.
 struct UsageDetails: View {
     @Environment(\.fonts) private var fonts
-    @EnvironmentObject private var model: TmuxModel
+    @Environment(TmuxModel.self) private var model
     let window: TmuxWindow
     @State private var full: String?
     @State private var loading = false
@@ -551,7 +551,7 @@ struct UsageDetails: View {
 /// Every Claude session on this server, with its status. Click one to jump to it.
 struct AgentsList: View {
     @Environment(\.fonts) private var fonts
-    @EnvironmentObject private var model: TmuxModel
+    @Environment(TmuxModel.self) private var model
     var onPick: (TmuxWindow) -> Void
 
     var body: some View {
@@ -589,7 +589,7 @@ struct AgentsList: View {
 /// Background commands Claude started in this conversation (Bash with run_in_background).
 struct BackgroundShells: View {
     @Environment(\.fonts) private var fonts
-    @EnvironmentObject private var model: TmuxModel
+    @Environment(TmuxModel.self) private var model
     @ObservedObject var store: ChatStore
     let window: TmuxWindow
     @State private var tasks: String?
@@ -638,7 +638,7 @@ struct BackgroundShells: View {
 /// "PR #2268" in Claude's mode line, as a live PR chip for the window's repository.
 struct PRStatusChip: View {
     @Environment(\.fonts) private var fonts
-    @EnvironmentObject private var model: TmuxModel
+    @Environment(TmuxModel.self) private var model
     let text: String
     let window: TmuxWindow
     @State private var repo: String?

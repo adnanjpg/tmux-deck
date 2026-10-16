@@ -5,7 +5,7 @@ import SwiftUI
 struct StatusLineEditor: View {
     @Environment(\.fonts) private var fonts
     let window: TmuxWindow
-    @EnvironmentObject private var model: TmuxModel
+    @Environment(TmuxModel.self) private var model
     @Environment(\.dismiss) private var dismiss
 
     @State private var loading = true

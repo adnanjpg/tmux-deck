@@ -100,6 +100,10 @@ Read these before touching the related area — each one cost real debugging tim
   → [docs/claude-code-integration.md](docs/claude-code-integration.md)
 - **macOS has no `setsid`,** and BSD `sed` doesn't take `\xNN` escapes. Remote scripts run on Linux
   *and* on this Mac. → [docs/tmux.md](docs/tmux.md)
+- **`TmuxModel` is `@Observable`; read it with `@Environment(TmuxModel.self)`, mark caches
+  `@ObservationIgnored`, and never assign a property the value it already has.** When it was an
+  `ObservableObject` mirrored into `AppModel`, every two-second poll re-diffed the whole window and
+  the app felt frozen. → [docs/appkit-and-swiftterm.md](docs/appkit-and-swiftterm.md)
 - **SSH to the work machine drops constantly.** Anything that must not half-finish has to survive a
   dead connection. → [docs/tmux.md](docs/tmux.md)
 
