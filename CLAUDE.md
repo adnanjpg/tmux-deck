@@ -104,6 +104,10 @@ Read these before touching the related area — each one cost real debugging tim
   `@ObservationIgnored`, and never assign a property the value it already has.** When it was an
   `ObservableObject` mirrored into `AppModel`, every two-second poll re-diffed the whole window and
   the app felt frozen. → [docs/appkit-and-swiftterm.md](docs/appkit-and-swiftterm.md)
+- **One SSH connection carries at most 10 sessions.** Past that, ssh silently opens a new
+  connection per command (seconds each) and everything snowballs; a window switch once waited
+  ~30 s after sending a prompt. All remote calls go through `RemoteGate`; pass `urgent: true`
+  for anything the user just did. → [docs/tmux.md](docs/tmux.md)
 - **SSH to the work machine drops constantly.** Anything that must not half-finish has to survive a
   dead connection. → [docs/tmux.md](docs/tmux.md)
 

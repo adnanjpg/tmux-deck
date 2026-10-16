@@ -816,7 +816,7 @@ for pane, pid, path in panes:
     func clearInput(_ w: TmuxWindow) {
         leftoverInput[w.id] = nil
         Task {
-            _ = await remote.run("tmux send-keys -t \(sq(target(w))) C-u")
+            _ = await remote.run("tmux send-keys -t \(sq(target(w))) C-u", urgent: true)
         }
     }
 
@@ -836,7 +836,7 @@ for pane, pid, path in panes:
                 if a.count < 3 {
                     if Date().timeIntervalSince(a.last) > 4 {
                         autoEnter[p.id] = (a.count + 1, Date())
-                        Task { _ = await remote.run("tmux send-keys -t \(sq(w.paneID)) Enter") }
+                        Task { _ = await remote.run("tmux send-keys -t \(sq(w.paneID)) Enter", urgent: true) }
                     }
                 } else {
                     reasons[p.id] = "Your message is still in Claude's input box."
@@ -1029,7 +1029,7 @@ for pane, pid, path in panes:
     func answer(key: String, text: String, in w: TmuxWindow) {
         let t = sq(target(w))
         Task {
-            _ = await remote.run("tmux send-keys -t \(t) \(sq(key)) && sleep 0.4 && tmux send-keys -t \(t) -l \(sq(text)) && sleep 0.2 && tmux send-keys -t \(t) Enter")
+            _ = await remote.run("tmux send-keys -t \(t) \(sq(key)) && sleep 0.4 && tmux send-keys -t \(t) -l \(sq(text)) && sleep 0.2 && tmux send-keys -t \(t) Enter", urgent: true)
             try? await Task.sleep(for: .milliseconds(300))
             await refresh()
         }
@@ -1518,7 +1518,7 @@ for pane, pid, path in panes:
     // MARK: Actions
 
     private func tmux(_ script: String) async -> Remote.Result {
-        let result = await remote.run(script)
+        let result = await remote.run(script, urgent: true)
         if !result.ok {
             let message = result.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
             flash(message.isEmpty ? "That didn't work." : message)
@@ -1666,7 +1666,7 @@ for pane, pid, path in panes:
         }.joined()
         if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             Task {
-                let result = await remote.run(imagePaste + "tmux send-keys -t \(t) Enter")
+                let result = await remote.run(imagePaste + "tmux send-keys -t \(t) Enter", urgent: true)
                 if !result.ok { flash("Couldn't send that. Check the connection.") }
                 await refresh()
             }
@@ -1722,7 +1722,7 @@ for pane, pid, path in panes:
         else nohup bash "$s" "$f" >/dev/null 2>&1 </dev/null & fi
         """
         Task {
-            let result = await remote.run(script, input: text)
+            let result = await remote.run(script, input: text, urgent: true)
             if !result.ok {
                 notifyProblem("Your message didn't send",
                               "\(displayTitle(w)) — \(Self.describe(result))")
@@ -1792,7 +1792,7 @@ for pane, pid, path in panes:
     func send(keys: [String], to w: TmuxWindow, literal: Bool = false) {
         let script = "tmux send-keys -t \(sq(target(w))) \(literal ? "-l " : "")" + keys.map(sq).joined(separator: " ")
         Task {
-            _ = await remote.run(script)
+            _ = await remote.run(script, urgent: true)
             try? await Task.sleep(for: .milliseconds(300))
             await refresh()
             // Esc makes Claude hand back the message it hadn't started on; that takes a moment

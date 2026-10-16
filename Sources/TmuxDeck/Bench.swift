@@ -9,9 +9,11 @@ import SwiftUI
 enum Bench {
     static let enabled = CommandLine.arguments.contains("--bench-chats")
         || CommandLine.arguments.contains("--check-poll")
+        || CommandLine.arguments.contains("--check-gate")
 
     static func run() {
         if CommandLine.arguments.contains("--check-poll") { return checkPoll() }
+        if CommandLine.arguments.contains("--check-gate") { return checkGate() }
         let args = CommandLine.arguments
         let count = args.firstIndex(of: "--bench-chats").flatMap { i in
             args.indices.contains(i + 1) ? Int(args[i + 1]) : nil } ?? 6
@@ -60,6 +62,32 @@ enum Bench {
                     }
                 }
             }
+            exit(0)
+        }
+    }
+
+    /// `--check-gate`: 20 background `sleep 2` at once on the first saved server, and one urgent
+    /// command 0.2 s in. Prints how long the urgent one took and whether any session was refused
+    /// (which means `RemoteGate` let too many through). Harmless on the server: it only sleeps.
+    private static func checkGate() {
+        guard let host = (UserDefaults(suiteName: "io.github.tmuxdeck") ?? .standard)
+            .stringArray(forKey: "hosts")?.first(where: { $0 != Remote.localHost }) else { exit(1) }
+        let remote = Remote(host: host)
+        Task { @MainActor in
+            let start = ContinuousClock.now
+            var refused = 0
+            await withTaskGroup(of: Remote.Result.self) { group in
+                for _ in 0..<20 { group.addTask { await remote.run("sleep 2; echo ok") } }
+                group.addTask {
+                    try? await Task.sleep(for: .milliseconds(200))
+                    let t = ContinuousClock.now
+                    let r = await remote.run("true", urgent: true)
+                    print("urgent command: \(Perf.ms(t.duration(to: .now)))ms, ok=\(r.ok)")
+                    return r
+                }
+                for await r in group where r.stderr.contains("refused") { refused += 1 }
+            }
+            print("all 21 done in \(Perf.ms(start.duration(to: .now)))ms, refused sessions: \(refused)")
             exit(0)
         }
     }

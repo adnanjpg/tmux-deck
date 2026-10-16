@@ -142,3 +142,21 @@ SSH to the user's work machine drops often (minutes at a time). Design according
   slowly. Reproduced with six concurrent calls — five warnings. `SSHMaster` (in `Remote.swift`)
   makes the first call for a host run alone and everything else wait for it; after that the socket
   exists and they just attach. Same test afterwards: no warnings.
+- **sshd allows 10 sessions per connection (`MaxSessions`), and everything shares one.** Each
+  command and each raw terminal's `ssh -t` is a session on the multiplexed master. Past ten the
+  master answers `mux_client_request_session: session request failed: Session open refused by
+  peer`, and ssh *silently* falls back to a brand-new connection — a full handshake, ~5 s extra
+  on the work link (measured: 11 concurrent `sleep 4` → 9 took 4.6 s, 2 were refused and took
+  10.1 s). Slower commands overlap more, so it snowballs: after sending a prompt (the send, chat
+  polls every second, status reads) a window switch's `select-window` waited ~30 s.
+  `RemoteGate` (in `Remote.swift`) now caps each host: background commands share 6 slots,
+  **urgent** ones (`run(…, urgent: true)` — switching, sending, keys, tmux actions, uploads) jump
+  the queue and may use the rest, and each open terminal takes one slot off the total of 9. New
+  user-triggered calls must pass `urgent: true`; new background ones must not. `TmuxDeck
+  --check-gate` stress-tests it (20 background `sleep 2` plus one urgent call: urgent returns in
+  ~1.1 s against a 0.7 s idle round trip). Commands that wait over 0.5 s or run over 5 s are
+  logged under the `perf` category.
+- **Commands run on GCD, not the Swift concurrency pool.** `Remote.execute` blocks a thread for
+  the whole command (`readDataToEndOfFile`, `waitUntilExit`). Inside `Task.detached` that thread
+  belonged to the cooperative pool, which has one thread per core, so a few slow ssh calls
+  stalled every other async task in the app.

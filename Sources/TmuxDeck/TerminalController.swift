@@ -64,7 +64,7 @@ final class TerminalController: NSObject, LocalProcessTerminalViewDelegate {
         if !alive {
             connect(initialWindow: windowID)
         } else {
-            Task { _ = await remote.run("tmux select-window -t \(sq(viewSession + ":" + windowID))") }
+            Task { _ = await remote.run("tmux select-window -t \(sq(viewSession + ":" + windowID))", urgent: true) }
         }
         let previous = zoomedPane
         zoomedPane = paneID
@@ -79,7 +79,7 @@ final class TerminalController: NSObject, LocalProcessTerminalViewDelegate {
                 // select-pane on another pane of a zoomed window unzooms it, so zoom after selecting.
                 script += "tmux select-pane -t \(p) && { [ \"$(tmux display -p -t \(p) '#{window_zoomed_flag}')\" = 1 ] || tmux resize-pane -Z -t \(p); }"
             }
-            if !script.isEmpty { _ = await remote.run(script) }
+            if !script.isEmpty { _ = await remote.run(script, urgent: true) }
         }
     }
 
@@ -111,6 +111,7 @@ final class TerminalController: NSObject, LocalProcessTerminalViewDelegate {
         env["LANG"] = env["LANG"] ?? "en_US.UTF-8"
         alive = true
         wanted = true
+        countSession(true)
         lastWindow = initialWindow ?? lastWindow
         reconnecting = false
         let command = remote.interactiveCommand(script)
@@ -136,6 +137,17 @@ final class TerminalController: NSObject, LocalProcessTerminalViewDelegate {
         reconnecting = false
         if alive { view.terminate() }
         alive = false
+        countSession(false)
+    }
+
+    /// Whether this terminal's `ssh -t` is counted against the server's session limit.
+    private var counted = false
+
+    private func countSession(_ open: Bool) {
+        guard open != counted, !remote.isLocal else { return }
+        counted = open
+        let host = remote.host
+        Task { await RemoteGate.shared.terminal(host, opened: open) }
     }
 
     /// Waits a bit longer each time, up to half a minute.
@@ -163,6 +175,7 @@ final class TerminalController: NSObject, LocalProcessTerminalViewDelegate {
     nonisolated func processTerminated(source: TerminalView, exitCode: Int32?) {
         Task { @MainActor in
             self.alive = false
+            self.countSession(false)
             self.onStateChange?()
             self.scheduleReconnect()
         }

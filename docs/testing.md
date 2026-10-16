@@ -147,6 +147,7 @@ from `.build/`, not the installed app):
 .build/release/TmuxDeck --bench-chats 8       # open the 8 largest cached chats off-screen, print ms
 BENCH_PNG=/tmp/shots BENCH_SETTLE=0 .build/release/TmuxDeck --bench-chats 4   # also save the first frame
 .build/debug/TmuxDeck --check-poll            # one read-only poll of each saved server, as parsed
+.build/debug/TmuxDeck --check-gate            # 20 background sleeps + 1 urgent call through RemoteGate
 ```
 
 `--bench-chats` contacts no server: it renders `ChatView` from the on-disk transcript cache. Use
