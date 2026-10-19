@@ -227,10 +227,13 @@ final class LayoutModel: ObservableObject {
     /// on its own, closing the split (splits are made by dragging or "Open to the right").
     func show(_ tag: String) {
         if let existing = root.leaves.first(where: { $0.tag == tag }) {
+            Perf.event("layout.show focus existing \(tag)")
             focus(existing.id)
             return
         }
+        Perf.event("layout.show \(tag)")
         commit(.leaf(id: focused, tag: tag), focus: focused, animated: isSplit)
+        Perf.event("layout.show committed")
     }
 
     /// Drops a window (sidebar tag) onto a tile.

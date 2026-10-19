@@ -85,6 +85,7 @@ struct ChatView: View {
             .onAppear {
                 // Lazy rows settle their heights over a few frames, so land on the bottom more than
                 // once — and once right away, or a long last turn opens on blank space for a frame.
+                Perf.event("chat appeared \(store.sessionID.prefix(8)) items=\(store.items.count)")
                 proxy.scrollTo("bottom", anchor: .bottom)
                 for delay in [0.05, 0.25, 0.6, 1.2] {
                     DispatchQueue.main.asyncAfter(deadline: .now() + delay) { proxy.scrollTo("bottom", anchor: .bottom) }

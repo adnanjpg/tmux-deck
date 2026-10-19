@@ -78,7 +78,7 @@ struct Remote: Hashable {
         let result = await execute(script, data: input, timeout: timeout)
         await RemoteGate.shared.release(host)
         let waited = Perf.ms(queued.duration(to: started)), ran = Perf.ms(started.duration(to: .now))
-        if waited > 500 || ran > 5000 {
+        if urgent || waited > 500 || ran > 5000 {
             let label = script.split(separator: "\n").first.map { String($0.prefix(50)) } ?? ""
             Perf.log.notice("remote\(urgent ? " (urgent)" : "", privacy: .public) waited \(waited)ms, ran \(ran)ms: \(label, privacy: .public)")
         }

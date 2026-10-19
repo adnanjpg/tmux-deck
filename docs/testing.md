@@ -135,10 +135,19 @@ log stream --predicate 'subsystem == "io.github.tmuxdeck"' --style compact
 ```
 
 - `main thread was busy for 812ms` — the watchdog (`Perf.startWatchdog`) pings the main queue
-  every 250 ms from a background thread and reports when the answer came late. This is what a
-  click that "didn't take" looks like from the inside; the timestamps say when.
+  every 100 ms from a background thread and reports any answer later than 120 ms. `main thread
+  saturated: 60% of pings came late over 5s` is the other shape of lag: many short stalls that
+  never trip the first line but leave the UI at a few frames a second.
 - `TmuxModel.apply took 40ms`, `ChatStore.poll parse … took 30ms` — `Perf.timed` around the two
   main-thread jobs that run every poll. Wrap any new main-thread work the same way.
+- `remote (urgent) waited 0ms, ran 640ms: tmux select-window …` — every urgent call (a user
+  action) with how long it queued and ran; background calls only when they waited > 500 ms or
+  ran > 5 s.
+- Breadcrumbs for a window switch, in the order they should appear: `mouse down at x,y` (every
+  click in the app, from `Perf.startWatchdog`'s event monitor), `sidebar picked host#id`,
+  `userSelected id`, `layout.show …` / `layout.show committed`, `tile abc123 now renders id`,
+  `chat appeared id items=N`. A click with no `sidebar picked` after it never reached the list; a
+  `layout.show committed` with no `tile … now renders` after it means the tile body didn't run.
 
 Two launch modes measure without the UI (both exit when done; run the debug or release binary
 from `.build/`, not the installed app):

@@ -186,7 +186,7 @@ struct ContentView: View {
         // tmux itself: a read inside the binding's getter isn't tracked by Observation.
         let selected = layout.focusedTag ?? app.selectionTag
         return List(selection: Binding(get: { selected },
-                                       set: { if let t = $0 { layout.show(t) } })) {
+                                       set: { if let t = $0 { Perf.event("sidebar picked \(t)"); layout.show(t) } })) {
             if plain.enabled || !plain.terminals.isEmpty {
                 Section(isExpanded: isExpanded("plain")) {
                     ForEach(plain.terminals(on: Remote.localHost)) { t in
@@ -618,6 +618,7 @@ struct ContentView: View {
     }
 
     @ViewBuilder private func windowContent(server: TmuxModel, window: TmuxWindow, tile: String) -> some View {
+        let _ = TileLog.note(tile: tile, window: window.id)
         if server.rawTerminal.contains(window.id) || window.state.isRunningProgram {
             // Each tile gets its own terminal, so two windows of one tmux session can sit
             // side by side. Keyed by tile and session: pointing a tile at another session
@@ -1347,6 +1348,16 @@ private struct SessionDropTarget: ViewModifier {
 /// What the sidebar is dragging right now. Drop delegates only get the payload on drop, but the
 /// indicator has to know *before* then whether it's a pane (join) or a window (reorder).
 @MainActor
+/// Says when a tile starts showing a different window (once per change, not per render).
+enum TileLog {
+    nonisolated(unsafe) private static var last: [String: String] = [:]
+    @MainActor static func note(tile: String, window: String) {
+        guard last[tile] != window else { return }
+        last[tile] = window
+        Perf.event("tile \(tile.prefix(6)) now renders \(window)")
+    }
+}
+
 enum SidebarDrag {
     static var current: String?
 

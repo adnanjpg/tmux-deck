@@ -1510,6 +1510,7 @@ for pane, pid, path in panes:
     }
 
     func userSelected(_ id: TmuxWindow.ID?) {
+        Perf.event("userSelected \(id ?? "nil")")
         lastUserSelection = Date()
         if let id { unseenDone.remove(id) }
         selection = id   // TerminalPane reacts and tells tmux to switch.

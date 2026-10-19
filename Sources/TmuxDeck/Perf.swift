@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import os
 
@@ -24,6 +25,11 @@ enum Perf {
         return try body()
     }
 
+    /// A timestamped breadcrumb: a click, a selection, a tile appearing.
+    static func event(_ message: String) {
+        log.notice("\(message, privacy: .public)")
+    }
+
     static func ms(_ d: Duration) -> Int64 {
         d.components.seconds * 1000 + d.components.attoseconds / 1_000_000_000_000_000
     }
@@ -32,22 +38,42 @@ enum Perf {
     static func startWatchdog() {
         let queue = DispatchQueue(label: "io.github.tmuxdeck.watchdog", qos: .utility)
         let timer = DispatchSource.makeTimerSource(queue: queue)
-        timer.schedule(deadline: .now() + 1, repeating: .milliseconds(250))
+        timer.schedule(deadline: .now() + 1, repeating: .milliseconds(100))
         var waiting = false
+        var pings = 0, late = 0, windowStart = ContinuousClock.now
         timer.setEventHandler {
             guard !waiting else { return }
             waiting = true
             let sent = ContinuousClock.now
             DispatchQueue.main.async {
-                let late = sent.duration(to: .now)
-                queue.async { waiting = false }
-                if late > .milliseconds(250) {
-                    log.notice("main thread was busy for \(Self.ms(late))ms")
+                let delay = sent.duration(to: .now)
+                queue.async {
+                    waiting = false
+                    pings += 1
+                    if delay > .milliseconds(50) { late += 1 }
+                    // Many short stalls feel as bad as one long one: say so once in a while.
+                    if windowStart.duration(to: .now) > .seconds(5) {
+                        if pings > 0 && late * 100 / pings >= 30 {
+                            log.notice("main thread saturated: \(late * 100 / pings)% of pings came late over 5s")
+                        }
+                        pings = 0; late = 0; windowStart = .now
+                    }
+                }
+                if delay > .milliseconds(120) {
+                    log.notice("main thread was busy for \(Self.ms(delay))ms")
                 }
             }
         }
         timer.resume()
         watchdog = timer
+        // Every click, so a click that "didn't take" can be told from one that never arrived.
+        clickMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .leftMouseUp]) { event in
+            let p = event.locationInWindow
+            let kind = event.type == .leftMouseDown ? "down" : "up"
+            log.notice("mouse \(kind, privacy: .public) at \(Int(p.x)),\(Int(p.y)) window=\(event.window?.windowNumber ?? 0)")
+            return event
+        }
     }
+    nonisolated(unsafe) private static var clickMonitor: Any?
     nonisolated(unsafe) private static var watchdog: DispatchSourceTimer?
 }
