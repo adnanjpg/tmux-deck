@@ -70,7 +70,13 @@ enum Perf {
         clickMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .leftMouseUp]) { event in
             let p = event.locationInWindow
             let kind = event.type == .leftMouseDown ? "down" : "up"
-            log.notice("mouse \(kind, privacy: .public) at \(Int(p.x)),\(Int(p.y)) window=\(event.window?.windowNumber ?? 0)")
+            var hit = ""
+            if event.type == .leftMouseDown, let content = event.window?.contentView {
+                var view = content.hitTest(p), chain: [String] = []
+                while let v = view, chain.count < 6 { chain.append(String(describing: type(of: v))); view = v.superview }
+                hit = " hit=" + chain.joined(separator: "<")
+            }
+            log.notice("mouse \(kind, privacy: .public) at \(Int(p.x)),\(Int(p.y)) window=\(event.window?.windowNumber ?? 0)\(hit, privacy: .public)")
             return event
         }
     }

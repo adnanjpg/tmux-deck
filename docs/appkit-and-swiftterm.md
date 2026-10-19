@@ -68,6 +68,18 @@ they deliberately consume it:
 
 They're local (this app only) and installed once from `AppModel.start()`.
 
+## Sidebar rows: a click is not always a selection
+
+Clicking some rows in the sidebar `List` did nothing: the perf log showed the mouse down and up
+arriving (`mouse down at 69,447`, then `mouse up` 110 ms later, so no AppKit tracking loop ran)
+but no `sidebar picked`, i.e. the list never called the selection binding's setter. The same
+row's context menu and "Open to the right" worked, and other rows selected instantly. The rows
+carry `.onDrag` and a drop delegate; under investigation (see `Perf.startWatchdog`'s
+`hit=` chain in the log for which view took the click). Until the cause is pinned down, every
+window and pane row has `RowClick`: a `.onTapGesture` that calls `LayoutModel.show(tag)` itself,
+so a click shows the window whether or not the list counted it. `show` is idempotent (a tag
+already in the focused tile returns early), so a click the list *does* handle isn't done twice.
+
 ## Keyboard shortcuts
 
 Declared as SwiftUI `Commands` in `App.swift`, which makes them real menu items — the reliable way

@@ -405,6 +405,7 @@ struct ContentView: View {
                           pinned: server.isPinned(window))
                     .equatable()
                     .tag(tag(window.id))
+                    .modifier(RowClick(tag: tag(window.id)))
                     .contextMenu { windowMenu(window, server) }
                     .onDrag { SidebarDrag.begin("\(server.host)#\(window.id)") }
                     .modifier(WindowDropTarget(server: server, window: window, session: session.name))
@@ -412,6 +413,7 @@ struct ContentView: View {
                     WindowRow(window: pane, title: server.displayTitle(pane), compact: true)
                         .padding(.leading, 20)
                         .tag(tag(pane.id))
+                        .modifier(RowClick(tag: tag(pane.id)))
                         .contextMenu { paneMenu(pane, server) }
                         .onDrag { SidebarDrag.begin("\(server.host)#\(pane.id)") }
                 }
@@ -1348,6 +1350,20 @@ private struct SessionDropTarget: ViewModifier {
 /// What the sidebar is dragging right now. Drop delegates only get the payload on drop, but the
 /// indicator has to know *before* then whether it's a pane (join) or a window (reorder).
 @MainActor
+/// A click on a row shows its window even when the list doesn't count it as a selection
+/// (it sometimes doesn't, on rows that also support drag — see docs/appkit-and-swiftterm.md).
+private struct RowClick: ViewModifier {
+    let tag: String
+    func body(content: Content) -> some View {
+        content
+            .contentShape(Rectangle())
+            .onTapGesture {
+                Perf.event("row tapped \(tag)")
+                LayoutModel.shared.show(tag)
+            }
+    }
+}
+
 /// Says when a tile starts showing a different window (once per change, not per render).
 enum TileLog {
     nonisolated(unsafe) private static var last: [String: String] = [:]

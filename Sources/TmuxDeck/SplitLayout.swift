@@ -227,6 +227,7 @@ final class LayoutModel: ObservableObject {
     /// on its own, closing the split (splits are made by dragging or "Open to the right").
     func show(_ tag: String) {
         if let existing = root.leaves.first(where: { $0.tag == tag }) {
+            if existing.id == focused { return }
             Perf.event("layout.show focus existing \(tag)")
             focus(existing.id)
             return
