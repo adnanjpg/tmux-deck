@@ -86,10 +86,17 @@ final class PlainTerminal: NSObject, ObservableObject, Identifiable, LocalProces
         NotificationCenter.default.addObserver(forName: .themeChanged, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { if let v = self?.view { applyTerminalTheme(to: v) } }
         }
-        start()
+        // A local shell is cheap to reopen. A remote one would start a fresh `claude` or
+        // `codex` on the server — outside tmux — every time the app launches, so those wait
+        // for a click (`everStarted` keeps the overlay honest about it).
+        if isLocal { start() }
     }
 
+    /// False for a remote terminal that was restored from the last launch and not yet connected.
+    @Published private(set) var everStarted = false
+
     func start() {
+        everStarted = true
         var env = ProcessInfo.processInfo.environment
         env["TERM"] = "xterm-256color"
         env["COLORTERM"] = "truecolor"
@@ -391,13 +398,15 @@ struct PlainTerminalView: View {
             .overlay {
                 if !terminal.running {
                     ContentUnavailableView {
-                        Label("Process ended", systemImage: "terminal")
+                        Label(terminal.everStarted ? "Process ended" : "Not connected", systemImage: "terminal")
                     } description: {
                         Text(terminal.isLocal
                              ? "This terminal isn't in tmux, so nothing was keeping it running."
-                             : "This is a plain SSH session on \(terminal.host) with no tmux behind it, so it ends when the connection does.")
+                             : terminal.everStarted
+                             ? "This is a plain SSH session on \(terminal.host) with no tmux behind it, so it ends when the connection does."
+                             : "Connecting starts a new \(terminal.kind.displayName.lowercased()) on \(terminal.host), outside tmux, so it waits for you.")
                     } actions: {
-                        Button("Start again") { terminal.start() }.keyboardShortcut(.defaultAction)
+                        Button(terminal.everStarted ? "Start again" : "Connect") { terminal.start() }.keyboardShortcut(.defaultAction)
                         Button("Close") { PlainTerminalStore.shared.close(terminal) }
                     }
                     .background(.regularMaterial)
