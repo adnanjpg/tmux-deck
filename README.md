@@ -112,7 +112,7 @@ and the gotchas that cost real debugging time. Deeper notes live in [`docs/`](do
 | [docs/architecture.md](docs/architecture.md) | File-by-file map, tag format, split-layout tree, persisted state |
 | [docs/claude-code-integration.md](docs/claude-code-integration.md) | Claude Code's session records and transcript format, screen scraping, how messages are sent reliably |
 | [docs/codex-cli-integration.md](docs/codex-cli-integration.md) | Codex's rollout files, matching one to a pane, and its two record formats |
-| [docs/tmux.md](docs/tmux.md) | tmux view sessions, targeting, pane zoom, capturing screens, portable remote shell |
+| [docs/tmux.md](docs/tmux.md) | tmux view sessions, targeting, not disturbing other clients, capturing screens, portable remote shell |
 | [docs/appkit-and-swiftterm.md](docs/appkit-and-swiftterm.md) | `acceptsFirstMouse`, the vendored SwiftTerm patch, the switcher panel, themes |
 | [docs/testing.md](docs/testing.md) | How to verify a change, and how to test tmux commands without breaking anything |
 | [docs/files-and-diffs.md](docs/files-and-diffs.md) | The Files, Changes and Past conversations views, and how saving avoids clobbering an agent |
