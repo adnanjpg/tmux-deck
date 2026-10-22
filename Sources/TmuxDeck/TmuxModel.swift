@@ -1386,21 +1386,26 @@ for pane, pid, path in panes:
            let saved = try? JSONDecoder().decode([SavedWindow].self, from: data) {
             candidates = saved
         }
+        // Dead records are candidates; live ones (in tmux or not — a conversation resumed in
+        // another terminal is still running) are reported so they're never offered.
         let script = #"""
         import json, glob, os, time
         for f in glob.glob(os.path.expanduser("~/.claude/sessions/*.json")):
             try: d = json.load(open(f))
             except Exception: continue
             try:
-                os.kill(int(os.path.basename(f)[:-5]), 0); continue   # still running
+                os.kill(int(os.path.basename(f)[:-5]), 0)
+                print(json.dumps({"live": d.get("sessionId")})); continue   # still running
             except Exception: pass
             if (d.get("updatedAt") or 0) / 1000 < time.time() - 7 * 86400: continue
             print(json.dumps({"tmux": d.get("tmux") or "", "id": d.get("sessionId"), "cwd": d.get("cwd") or ""}))
         """#
         let result = await remote.run("python3 -", input: script)
+        var running = Set<String>()
         for line in result.stdout.split(separator: "\n") {
-            guard let obj = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any],
-                  let id = obj["id"] as? String, let tmuxTarget = obj["tmux"] as? String,
+            guard let obj = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any] else { continue }
+            if let live = obj["live"] as? String { running.insert(live); continue }
+            guard let id = obj["id"] as? String, let tmuxTarget = obj["tmux"] as? String,
                   let colon = tmuxTarget.firstIndex(of: ":"),
                   !candidates.contains(where: { $0.claudeSessionID == id }) else { continue }
             let session = String(tmuxTarget[..<colon])
@@ -1411,7 +1416,7 @@ for pane, pid, path in panes:
         }
         // Leave out what's already running.
         let live = sessions.flatMap(\.windows).flatMap { [$0] + $0.paneItems }
-        let liveClaude = Set(live.compactMap(\.claude?.sessionID))
+        let liveClaude = Set(live.compactMap(\.claude?.sessionID)).union(running)
         let liveCodex = Set(live.compactMap(\.codex?.sessionID))
         let liveSessions = Set(sessions.map(\.name))
         let missing = candidates.filter { c in

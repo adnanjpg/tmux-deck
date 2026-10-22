@@ -818,7 +818,8 @@ struct AddServerView: View {
                 .multilineTextAlignment(.center)
                 .foregroundStyle(.secondary)
                 .frame(maxWidth: 420)
-            if !app.servers.contains(where: { $0.host == Remote.localHost }) {
+            let offersLocal = !app.servers.contains(where: { $0.host == Remote.localHost })
+            if offersLocal {
                 Button { draft = Remote.localHost; connect() } label: {
                     Label("This Mac — tmux sessions, no SSH", systemImage: "laptopcomputer")
                         .frame(maxWidth: 300)
@@ -826,7 +827,6 @@ struct AddServerView: View {
                 .buttonStyle(.borderedProminent)
                 .controlSize(.large)
                 .help("Run tmux and Claude sessions on this Mac")
-                Text("or a server over SSH:").font(fonts.caption).foregroundStyle(.secondary)
             }
             if !PlainTerminalStore.shared.enabled {
                 Button {
@@ -841,22 +841,27 @@ struct AddServerView: View {
                 .controlSize(.large)
                 .help("Normal terminals running directly in the app, like Terminal.app tabs")
             }
+            if offersLocal { Text("or a server over SSH:").font(fonts.caption).foregroundStyle(.secondary) }
             let available = configured.filter { h in !app.servers.contains { $0.host == h } }
             if !available.isEmpty {
+                // One host per row, so the whole name always shows; a long one wraps rather
+                // than being cut to "my-long-server-na…" in a narrow grid cell.
                 ScrollView {
-                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 130), spacing: 8)], spacing: 8) {
+                    VStack(spacing: 8) {
                         ForEach(available, id: \.self) { host in
                             Button { draft = host } label: {
                                 Label(host, systemImage: "server.rack")
                                     .frame(maxWidth: .infinity, alignment: .leading)
-                                    .lineLimit(1)
+                                    .fixedSize(horizontal: false, vertical: true)
                             }
                             .buttonStyle(.bordered)
                             .tint(draft == host ? .accentColor : nil)
+                            .help(host)
                         }
                     }
                 }
-                .frame(maxWidth: 440, maxHeight: 150)
+                .frame(width: 320)
+                .frame(maxHeight: 150)
             }
             TextField("SSH host", text: $draft, prompt: Text("my-server or user@192.168.1.20"))
                 .textFieldStyle(.roundedBorder)
@@ -1172,9 +1177,9 @@ struct RestoreView: View {
         .padding(20)
         .frame(width: 520)
         .task {
-            let found = await server.restoreCandidates()
-            candidates = found
-            chosen = Set(found.map(\.id))
+            // Nothing is ticked to begin with: the list includes every conversation that
+            // ended in the last week, most of which nobody wants back.
+            candidates = await server.restoreCandidates()
         }
     }
 
