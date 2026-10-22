@@ -39,6 +39,9 @@ An agent is writing to these same files, so the editor is deliberately careful:
 - A read returns the file's text **and a sha256 digest**.
 - A write sends the digest back; the helper refuses if the file no longer matches it, and the UI
   offers reload or overwrite rather than picking one for you.
+- For a write the helper is passed with `python3 -c` and only the new contents go on stdin.
+  (`python3 -` reads stdin to the end as the program, so a body after a marker line was parsed as
+  code and the save never happened.)
 - The write goes to `<path>.tmxdeck.tmp` and is renamed over the original, so a dropped connection
   can't truncate a file. The original's mode is preserved.
 - Files over 4 MB, files with NUL bytes in the first 8 KB, and non-UTF-8 files are refused with a
