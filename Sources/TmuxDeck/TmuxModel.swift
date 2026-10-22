@@ -1675,6 +1675,9 @@ for pane, pid, path in panes:
         }
         // The message is uploaded first, then pasted and submitted by a background job on
         // the server (setsid nohup), so a dropped connection can't leave it half-sent.
+        // However the job ends, it leaves no temp file behind. The `deck-compose` buffer is
+        // deleted by `paste-buffer -d` on success and only explicitly when the paste failed:
+        // a later job may already have loaded its own message into that buffer name.
         let inner: String
         if w.assistant == .codex {
             // Codex's composer marks its input line with "›". Same problem as Claude: an
@@ -1682,37 +1685,40 @@ for pane, pid, path in panes:
             // the text to show up and press Enter until the line clears.
             inner = """
             f="$1"
-            \(imagePaste)tmux load-buffer -b deck-compose "$f" && tmux paste-buffer -p -d -b deck-compose -t \(t) || exit 1
+            trap 'rm -f "$f" "$0"' EXIT
+            \(imagePaste)tmux load-buffer -b deck-compose "$f" && tmux paste-buffer -p -d -b deck-compose -t \(t) || { tmux delete-buffer -b deck-compose 2>/dev/null; exit 1; }
             first=$(head -n1 "$f" | sed 's/^[[:space:]]*//' | cut -c1-20)
             inbox() { tmux capture-pane -p -t \(t) | perl -pe 's/\\xc2\\xa0/ /g' | grep '›' | tail -1; }
             waiting() { l=$(inbox); case "$l" in *"$first"*|*"Pasted"*) return 0;; *) return 1;; esac; }
             for i in 1 2 3 4 5 6 7 8 9 10; do waiting && break; sleep 0.2; done
             sleep 0.3
             for i in 1 2 3 4; do tmux send-keys -t \(t) Enter; sleep 1; waiting || break; done
-            rm -f "$f" "$0"
             """
         } else if w.state.isClaude {
             // Claude Code can swallow an Enter that arrives while it's still taking in a
             // paste, and for /commands the first Enter only picks the autocomplete entry.
             // So: wait until the text shows in Claude's input line, press Enter, and keep
             // pressing (up to 4 times) until the input line no longer holds it.
-            // Claude's prompt is "❯" plus a no-break space, normalised here with sed.
+            // Claude's prompt is "❯" plus a no-break space, normalised here with perl; the
+            // prompt is stripped with sed, not `cut -c4-`, which counts characters in a UTF-8
+            // locale and ate the first letter of every short message.
             inner = """
             f="$1"
-            \(imagePaste)tmux load-buffer -b deck-compose "$f" && tmux paste-buffer -p -d -b deck-compose -t \(t) || exit 1
+            trap 'rm -f "$f" "$0"' EXIT
+            \(imagePaste)tmux load-buffer -b deck-compose "$f" && tmux paste-buffer -p -d -b deck-compose -t \(t) || { tmux delete-buffer -b deck-compose 2>/dev/null; exit 1; }
             first=$(head -n1 "$f" | sed 's/^[[:space:]]*//' | cut -c1-20)
-            inbox() { tmux capture-pane -p -t \(t) | perl -pe 's/\\xc2\\xa0/ /g' | grep '^❯' | tail -1 | cut -c4-; }
+            inbox() { tmux capture-pane -p -t \(t) | perl -pe 's/\\xc2\\xa0/ /g' | grep '^❯' | tail -1 | sed 's/^❯[[:space:]]*//'; }
             waiting() { l=$(inbox); case "$l" in *"$first"*|*"[Pasted text"*) return 0;; *) return 1;; esac; }
             for i in 1 2 3 4 5 6 7 8 9 10; do waiting && break; sleep 0.2; done
             sleep 0.3
             for i in 1 2 3 4; do tmux send-keys -t \(t) Enter; sleep 1; waiting || break; done
-            rm -f "$f" "$0"
             """
         } else {
             inner = """
             f="$1"
-            \(imagePaste)tmux load-buffer -b deck-compose "$f" && tmux paste-buffer -p -d -b deck-compose -t \(t) && sleep 0.2 && tmux send-keys -t \(t) Enter
-            rm -f "$f" "$0"
+            trap 'rm -f "$f" "$0"' EXIT
+            \(imagePaste)tmux load-buffer -b deck-compose "$f" && tmux paste-buffer -p -d -b deck-compose -t \(t) || { tmux delete-buffer -b deck-compose 2>/dev/null; exit 1; }
+            sleep 0.2 && tmux send-keys -t \(t) Enter
             """
         }
         let script = """

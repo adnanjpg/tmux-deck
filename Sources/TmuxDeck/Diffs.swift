@@ -163,8 +163,10 @@ def out(**d):
     print(json.dumps(d)); sys.exit()
 
 def git(root, *args, limit=None):
+    # Read-only, and polled every few seconds: --no-optional-locks keeps `git status` from
+    # taking .git/index.lock, which would make someone's own staging in that tree fail.
     try:
-        p = subprocess.run(["git", "-C", root] + list(args), capture_output=True, text=True, timeout=60)
+        p = subprocess.run(["git", "--no-optional-locks", "-C", root] + list(args), capture_output=True, text=True, timeout=60)
     except Exception as exc:
         return "", str(exc)
     return p.stdout, p.stderr if p.returncode else ""

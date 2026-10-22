@@ -110,6 +110,8 @@ Read these before touching the related area — each one cost real debugging tim
   for anything the user just did. → [docs/tmux.md](docs/tmux.md)
 - **SSH to the work machine drops constantly.** Anything that must not half-finish has to survive a
   dead connection. → [docs/tmux.md](docs/tmux.md)
+- **`cut -c` counts characters in a UTF-8 locale and bytes in C.** Stripping Claude's `❯` prompt
+  with `cut -c4-` ate the first letter of every short message in one of them; use `sed`.
 
 ## Testing
 
