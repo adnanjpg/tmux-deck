@@ -321,8 +321,11 @@ final class FileTree: ObservableObject {
     /// may have changed it since it was read, and silently clobbering that would be the worst
     /// possible behaviour for a tool that sits next to a coding agent.
     func write(_ path: String, text: String, expecting digest: String) async -> Result<String, FileError> {
-        let result = await remote.run("python3 - write \(sq(path)) \(sq(digest))",
-                                      input: Self.helper + "\n#--BODY--\n" + text, timeout: 60)
+        // The helper goes in as an argument here, not on stdin: `python3 -` parses stdin to
+        // the end as the program, so a body after a marker line was read as code and the
+        // helper never saw it. Only the new contents arrive on stdin.
+        let result = await remote.run("python3 -c \(sq(Self.helper)) write \(sq(path)) \(sq(digest))",
+                                      input: text, timeout: 60)
         guard result.ok, let data = result.stdout.data(using: .utf8),
               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             let message = result.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -332,8 +335,8 @@ final class FileTree: ObservableObject {
         return .success(obj["digest"] as? String ?? "")
     }
 
-    /// `python3 - <list|read|write> <path> [digest]`, with the new contents after a `#--BODY--`
-    /// line on stdin for a write (the program itself arrives on stdin, so they share it).
+    /// `python3 - <list|read> <path>` with the program on stdin, or
+    /// `python3 -c <program> write <path> [digest]` with the new contents on stdin.
     static let helper = #"""
 import hashlib, json, os, sys
 
@@ -430,12 +433,7 @@ if mode == "read":
 
 if mode == "write":
     expected = sys.argv[3] if len(sys.argv) > 3 else ""
-    body = sys.stdin.read()
-    marker = "\n#--BODY--\n"
-    i = body.find(marker)
-    if i < 0:
-        out(error="nothing to write")
-    text = body[i + len(marker):]
+    text = sys.stdin.read()
     if os.path.exists(path):
         with open(path, "rb") as fh:
             current = fh.read()
