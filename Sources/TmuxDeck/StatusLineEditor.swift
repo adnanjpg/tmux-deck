@@ -163,7 +163,9 @@ print(json.dumps({"command": cmd, "path": path, "script": text}))
                 setup = "mkdir -p ~/.cache/tmuxdeck && printf %s \(sq(script)) > \(tmp) && chmod +x \(tmp) && "
                 run = command.replacingOccurrences(of: scriptPath, with: tmp)
             }
-            let result = await model.remote.run(setup + "cd \(sq(window.path)) 2>/dev/null; " + run, input: sampleInput, timeout: 20)
+            // The temporary copy goes away afterwards, whatever the test did.
+            let cleanup = setup.isEmpty ? "" : "; st=$?; rm -f \"$HOME/.cache/tmuxdeck/statusline-test\"; exit $st"
+            let result = await model.remote.run(setup + "cd \(sq(window.path)) 2>/dev/null; " + run + cleanup, input: sampleInput, timeout: 20)
             testOutput = stripANSI(result.stdout).trimmingCharacters(in: .newlines)
             if !result.ok {
                 error = "Exited with status \(result.status). " + stripANSI(result.stderr).trimmingCharacters(in: .whitespacesAndNewlines)
@@ -176,25 +178,44 @@ print(json.dumps({"command": cmd, "path": path, "script": text}))
         saving = true
         error = nil
         Task {
-            var steps: [String] = []
-            if let scriptPath, script != originalScript {
-                steps.append("cp \(sq(scriptPath)) \(sq(scriptPath + ".bak-tmuxdeck")) && printf %s \(sq(script)) > \(sq(scriptPath))")
-            }
-            if command != originalCommand {
-                let py = """
-                import json, os, shutil, sys
+            // Both files belong to Claude Code and are read while it runs, so each is written
+            // to a temp file next to it and swapped in whole, keeping its mode; the previous
+            // version is kept as a dated backup (the last five of them).
+            let py = """
+            import json, os, shutil, sys, tempfile, time
+
+            def backup(p):
+                stamp = time.strftime("%Y%m%d-%H%M%S")
+                shutil.copy2(p, "%s.bak-tmuxdeck-%s" % (p, stamp))
+                d, base = os.path.dirname(p) or ".", os.path.basename(p) + ".bak-tmuxdeck-"
+                old = sorted(f for f in os.listdir(d) if f.startswith(base))
+                for f in old[:-5]: os.unlink(os.path.join(d, f))
+
+            def write(p, text, default_mode):
+                p = os.path.realpath(os.path.expanduser(p))
+                mode = os.stat(p).st_mode & 0o7777 if os.path.exists(p) else default_mode
+                if os.path.exists(p): backup(p)
+                fd, tmp = tempfile.mkstemp(prefix=".tmuxdeck-", dir=os.path.dirname(p))
+                with os.fdopen(fd, "w") as fh: fh.write(text)
+                os.chmod(tmp, mode)
+                os.replace(tmp, p)
+
+            script_path, command = sys.argv[1], sys.argv[2]
+            if script_path:
+                write(script_path, sys.stdin.read(), 0o755)
+            if command:
                 p = os.path.expanduser("~/.claude/settings.json")
                 d = json.load(open(p)) if os.path.exists(p) else {}
-                if os.path.exists(p): shutil.copy(p, p + ".bak-tmuxdeck")
                 sl = d.get("statusLine") if isinstance(d.get("statusLine"), dict) else {"type": "command"}
                 sl["type"] = "command"
-                sl["command"] = sys.argv[1]
+                sl["command"] = command
                 d["statusLine"] = sl
-                json.dump(d, open(p, "w"), indent=2)
-                """
-                steps.append("python3 -c \(sq(py)) \(sq(command))")
-            }
-            let result = await model.remote.run(steps.joined(separator: " && "), timeout: 20)
+                write(p, json.dumps(d, indent=2) + "\\n", 0o644)
+            """
+            let scriptToWrite = (scriptPath != nil && script != originalScript) ? scriptPath! : ""
+            let commandToWrite = command != originalCommand ? command : ""
+            let result = await model.remote.run("python3 -c \(sq(py)) \(sq(scriptToWrite)) \(sq(commandToWrite))",
+                                                input: script, timeout: 20)
             saving = false
             if result.ok {
                 dismiss()

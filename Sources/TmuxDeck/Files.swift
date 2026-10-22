@@ -335,7 +335,7 @@ final class FileTree: ObservableObject {
     /// `python3 - <list|read|write> <path> [digest]`, with the new contents after a `#--BODY--`
     /// line on stdin for a write (the program itself arrives on stdin, so they share it).
     static let helper = #"""
-import hashlib, json, os, sys
+import hashlib, json, os, sys, tempfile
 
 MAX = 4_000_000
 
@@ -442,16 +442,22 @@ if mode == "write":
         if expected and digest_of(current) != expected:
             out(error="This file changed on the server since you opened it. Reload to see the new version.")
     data = text.encode("utf-8")
-    tmp = path + ".tmxdeck.tmp"
+    # Written to a private temp name next to the target and swapped in. A fixed temp name
+    # could be planted as a link to somewhere else; and the swap goes through a symlink to
+    # whatever it points at, so saving a linked file edits the file, not the link.
+    real = os.path.realpath(path)
+    tmp = None
     try:
-        with open(tmp, "wb") as fh:
+        fd, tmp = tempfile.mkstemp(prefix=".tmxdeck-", dir=os.path.dirname(real) or ".")
+        with os.fdopen(fd, "wb") as fh:
             fh.write(data)
-        if os.path.exists(path):
-            os.chmod(tmp, os.stat(path).st_mode & 0o7777)
-        os.replace(tmp, path)
+        if os.path.exists(real):
+            os.chmod(tmp, os.stat(real).st_mode & 0o7777)
+        os.replace(tmp, real)
     except OSError as exc:
-        try: os.unlink(tmp)
-        except OSError: pass
+        if tmp:
+            try: os.unlink(tmp)
+            except OSError: pass
         out(error=str(exc))
     out(digest=digest_of(data))
 

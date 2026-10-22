@@ -39,8 +39,10 @@ An agent is writing to these same files, so the editor is deliberately careful:
 - A read returns the file's text **and a sha256 digest**.
 - A write sends the digest back; the helper refuses if the file no longer matches it, and the UI
   offers reload or overwrite rather than picking one for you.
-- The write goes to `<path>.tmxdeck.tmp` and is renamed over the original, so a dropped connection
-  can't truncate a file. The original's mode is preserved.
+- The write goes to a `mkstemp` file next to the target and is renamed over it, so a dropped
+  connection can't truncate a file. The original's mode is preserved. A fixed temp name (it used
+  to be `<path>.tmxdeck.tmp`) could be planted as a link elsewhere. The rename goes through a
+  symlink to its target, so saving a linked file edits the file rather than replacing the link.
 - Files over 4 MB, files with NUL bytes in the first 8 KB, and non-UTF-8 files are refused with a
   reason rather than mangled.
 
@@ -60,7 +62,9 @@ the branch it lands on", not "what's uncommitted".
   `trunk`, never the current branch. It can be overridden per tile.
 - `git worktree list --porcelain` fills a picker, so you can jump between sessions' diffs. (41 of
   them on the machine this was built against.)
-- It re-reads every six seconds, because the tree is being written to while you read it.
+- It re-reads every six seconds, because the tree is being written to while you read it. Every
+  git call is `git --no-optional-locks …`: a plain `git status` takes `.git/index.lock`, and polled
+  every few seconds that makes someone's own `git add` in that tree fail.
 
 Tag: `diff#<host>#<path>`.
 

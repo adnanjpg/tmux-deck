@@ -59,7 +59,9 @@ struct Remote: Hashable {
     /// Uploads `data` into ~/.cache/tmuxdeck on the remote machine and returns its absolute path.
     func upload(_ data: Data, fileName: String) async -> String? {
         let dir = "~/.cache/tmuxdeck"
-        let result = await run("mkdir -p \(dir) && cat > \(dir)/\(sq(fileName)) && cd \(dir) && printf '%s/%s' \"$PWD\" \(sq(fileName))",
+        // Pasted screenshots were never cleaned up; week-old ones go each time a new one lands.
+        let prune = "find \(dir) -maxdepth 1 -name 'screenshot-*.png' -mtime +7 -delete 2>/dev/null; "
+        let result = await run("mkdir -p \(dir) && \(prune)cat > \(dir)/\(sq(fileName)) && cd \(dir) && printf '%s/%s' \"$PWD\" \(sq(fileName))",
                                data: data, timeout: 120, urgent: true)
         let path = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
         return result.ok && path.hasPrefix("/") ? path : nil

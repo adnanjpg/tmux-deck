@@ -228,6 +228,7 @@ final class ThemeManager: ObservableObject {
         do {
             if url.pathExtension.lowercased() == "vsix" {
                 let tmp = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+                defer { try? fm.removeItem(at: tmp) }
                 let p = Process()
                 p.executableURL = URL(fileURLWithPath: "/usr/bin/unzip")
                 p.arguments = ["-q", url.path, "-d", tmp.path]
