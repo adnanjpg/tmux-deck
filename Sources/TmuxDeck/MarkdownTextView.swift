@@ -95,9 +95,18 @@ struct MarkdownTextView: NSViewRepresentable {
 
         func textView(_ view: NSTextView, clickedOnLink link: Any, at index: Int) -> Bool {
             guard let url = link as? URL ?? (link as? String).flatMap(URL.init(string:)) else { return false }
-            NSWorkspace.shared.open(url)
+            if SafeLinks.allows(url) { NSWorkspace.shared.open(url) }
             return true
         }
+    }
+}
+
+/// Which links in a transcript may open with a click. Markdown from a model or a tool can
+/// name any scheme — `file://`, a custom app scheme — and one click would hand it to that
+/// app; only web and mail links go through.
+enum SafeLinks {
+    static func allows(_ url: URL) -> Bool {
+        ["http", "https", "mailto"].contains(url.scheme?.lowercased() ?? "")
     }
 }
 

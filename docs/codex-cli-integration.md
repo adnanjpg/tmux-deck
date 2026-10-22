@@ -22,8 +22,8 @@ The first line is a `session_meta` record with `cwd`, `session_id`, `originator`
 ## Matching a pane to its rollout — the part that bites
 
 Claude Code writes `~/.claude/sessions/<pid>.json` naming its tmux pane. **Codex writes nothing
-like that**, so `codexFinder` (in `TmuxModel.swift`, runs on the server each poll) has to work it
-out:
+like that**, so `codexFinder` (in `TmuxModel.swift`, runs on the server every half minute — sooner
+while a Codex pane has no match — since it stats every rollout file) has to work it out:
 
 1. Walk the process tree down from `pane_pid` to the `codex` process.
 2. Read its start time (`ps -o lstart=`, same format on macOS and Linux).

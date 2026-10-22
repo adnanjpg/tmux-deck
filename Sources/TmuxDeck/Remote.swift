@@ -88,7 +88,8 @@ struct Remote: Hashable {
     func execute(_ script: String, data input: Data?, timeout: TimeInterval) async -> Result {
         // This Mac: a login shell, so Homebrew's tmux and your PATH are there.
         let executable = isLocal ? "/bin/zsh" : "/usr/bin/ssh"
-        let args = isLocal ? ["-lc", script] : Self.baseOptions + ["-o", "BatchMode=yes", host, script]
+        // `--` so a host name can never be read as an ssh option.
+        let args = isLocal ? ["-lc", script] : Self.baseOptions + ["-o", "BatchMode=yes", "--", host, script]
         // On a GCD thread, not the Swift concurrency pool: this blocks for as long as the command
         // runs, and the pool has one thread per core — a handful of slow commands used to starve
         // every other async task in the app.
@@ -132,7 +133,12 @@ struct Remote: Hashable {
 
     /// Arguments for an interactive `ssh -t` that runs `script` on the remote side.
     func interactiveArguments(_ script: String) -> [String] {
-        Self.baseOptions + ["-t", host, script]
+        Self.baseOptions + ["-t", "--", host, script]
+    }
+
+    /// A host name ssh would read as an option rather than a host.
+    static func isSafeHost(_ host: String) -> Bool {
+        !host.isEmpty && !host.hasPrefix("-")
     }
 }
 
