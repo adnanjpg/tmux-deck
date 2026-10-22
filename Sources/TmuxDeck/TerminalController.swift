@@ -99,7 +99,10 @@ final class TerminalController: NSObject, LocalProcessTerminalViewDelegate {
         // session whenever nothing is attached to it, killing every window in it.
         // Stale view sessions are cleaned up by TmuxModel's refresh instead.
         let script = "tmux kill-session -t \(sq("=" + viewSession)) 2>/dev/null; "
-            + "exec tmux new-session -t \(sq(session)) -s \(sq(viewSession))"
+            // `-f ignore-size` (tmux ≥ 3.2): tmux sizes a window to its most recent client,
+            // so a tile would resize the shared window — and every TUI in it — for every
+            // other client. With the flag the deck client is left out of the sizing.
+            + "exec tmux new-session -f ignore-size -t \(sq(session)) -s \(sq(viewSession))"
             + " \\; set status off \\; set mouse on" + select
 
         var env = ProcessInfo.processInfo.environment

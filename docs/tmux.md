@@ -74,6 +74,21 @@ than from `onDisappear`, which also fires while SwiftUI re-lays out.
 Two tiles on two *panes of the same window* still fight over zoom, because zoom is a property of the
 tmux window (below).
 
+## The view client must not resize shared windows
+
+Other tmux clients (an editor's terminal, another machine) are attached to the same windows, and
+tmux sizes a window to its most recent client by default (`window-size latest`). A tile would
+therefore resize the shared window — and every Claude in it would redraw — on layout restore, on
+reconnect, whenever a tile changed. So the view session is attached with the client flag:
+
+```sh
+tmux new-session -f ignore-size -t a -s deck-a-1234 \; set status off \; set mouse on
+```
+
+`ignore-size` (tmux ≥ 3.2) leaves the deck client out of the sizing. The trade: a window sized by
+someone else's client is shown clipped in a smaller tile. Verified on a throwaway server: a
+60-column `ignore-size` client leaves a 150-column window at 150; a plain client shrinks it to 60.
+
 ## Single-pane tiles and zoom
 
 A tile showing one pane of a multi-pane window would otherwise render the whole window (tmux draws
