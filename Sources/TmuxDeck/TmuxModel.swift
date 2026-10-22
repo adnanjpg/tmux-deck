@@ -278,7 +278,7 @@ final class TmuxModel: Identifiable {
 
     // MARK: Refresh
 
-    private static let sep = ":::"
+    nonisolated private static let sep = ":::"
 
     /// Prints one `@@SES` line per running Claude Code process that sits in a tmux pane.
     /// A session can *park* its job into a background process (`kind: "bg"`): the pane's own
@@ -287,7 +287,8 @@ final class TmuxModel: Identifiable {
     /// live status. The pane's record is merged with that one, so a parked session doesn't
     /// spin forever and its chat can follow the transcript into the new session file.
     private static let sessionRecordsScript = #"""
-import json, glob, os
+import json, glob, os, sys
+mark = sys.argv[1] if len(sys.argv) > 1 else "@@"
 recs = []
 for f in glob.glob(os.path.expanduser("~/.claude/sessions/*.json")):
     try:
@@ -304,41 +305,62 @@ for d in recs:
             if k in bg: d[k] = bg[k]
             else: d.pop(k, None)
         d["continuedIn"] = bg.get("sessionId")
-    print("@@SES " + json.dumps(d))
+    print(mark + "SES " + json.dumps(d))
 """#
 
-    private static let pollScript: String = {
-        let fields = ["session_name", "window_id", "window_index", "window_name",
-                      "pane_current_command", "window_panes", "window_active", "pane_current_path",
-                      "pane_id", "pane_index", "pane_active", "window_zoomed_flag"]
-        let format = fields.map { "#{\($0)}" }.joined(separator: sep)
+    nonisolated private static let pollFields = ["session_name", "window_id", "window_index", "window_name",
+                                     "pane_current_command", "window_panes", "window_active", "pane_current_path",
+                                     "pane_id", "pane_index", "pane_active", "window_zoomed_flag"]
+
+    /// The poll output mixes tmux rows, session records and raw screen captures. Every marker
+    /// carries a nonce chosen per poll (`@@<nonce>SES`…), so nothing printed *on* a Claude
+    /// screen can be mistaken for a session record or start a capture block of its own.
+    private static func pollScript(mark: String, codexFinder: Bool) -> String {
+        let format = pollFields.map { "#{\($0)}" }.joined(separator: sep)
+        let finder = codexFinder ? "printf '%s\\n' \"$codex_panes\" | python3 -c \(sq(codexFinderScript)) \(mark) 2>/dev/null" : ":"
         return """
         tmux list-sessions -F '#{session_name} #{session_attached} #{session_group_size}' 2>/dev/null \
           | awk '$1 ~ /^\(viewSessionPrefix)/ && $2 == 0 && $3 > 1 {print $1}' \
           | while read -r s; do tmux kill-session -t "=$s"; done
         tmux list-panes -a -F \(sq(format)) 2>/dev/null || echo @@NOSERVER
-        python3 -c \(sq(sessionRecordsScript)) 2>/dev/null
+        python3 -c \(sq(sessionRecordsScript)) \(mark) 2>/dev/null
         claude_panes=$(for f in ~/.claude/sessions/*.json; do [ -f "$f" ] && kill -0 "$(basename "$f" .json)" 2>/dev/null && grep -o '"tmux":"[^"]*"' "$f" | grep -o '%[0-9]*'; done)
-        for w in $( (tmux list-panes -a -f '#{m:*claude*,#{pane_current_command}}' -F '#{pane_id}' 2>/dev/null; echo "$claude_panes") | grep . | sort -u); do
-          printf '@@CAP %s\\n' "$w"
+        for w in $( (tmux list-panes -a -f '#{m:*claude*,#{pane_current_command}}' -F '#{pane_id}' 2>/dev/null; echo "$claude_panes") | grep '^%[0-9]*$' | sort -u); do
+          printf '\(mark)CAP %s\\n' "$w"
           tmux capture-pane -e -p -t "$w" 2>/dev/null | tail -30
         done
         codex_panes=$(tmux list-panes -a -f '#{m:*codex*,#{pane_current_command}}' -F '#{pane_id} #{pane_pid} #{pane_current_path}' 2>/dev/null)
         if [ -n "$codex_panes" ]; then
           for w in $(printf '%s\\n' "$codex_panes" | awk '{print $1}' | sort -u); do
-            printf '@@CAP %s\\n' "$w"
+            printf '\(mark)CAP %s\\n' "$w"
             tmux capture-pane -e -p -t "$w" 2>/dev/null | tail -30
           done
-          printf '%s\\n' "$codex_panes" | python3 -c \(sq(codexFinderScript)) 2>/dev/null
+          \(finder)
         fi
         """
-    }()
+    }
+
+    /// Ids tmux and the CLIs hand back, checked before they go anywhere near a shell: a pane is
+    /// `%12`, a window `@7`, and a Claude or Codex session id is a UUID.
+    nonisolated static func isPaneID(_ s: String) -> Bool { s.range(of: #"^%[0-9]+$"#, options: .regularExpression) != nil }
+    nonisolated static func isWindowID(_ s: String) -> Bool { s.range(of: #"^@[0-9]+$"#, options: .regularExpression) != nil }
+    nonisolated static func isSessionID(_ s: String) -> Bool { s.range(of: #"^[0-9a-fA-F-]{8,64}$"#, options: .regularExpression) != nil }
+
+    /// Escapes a value for a tmux option that expands formats (`-c` on new-window), where a
+    /// `#(…)` inside a folder name would otherwise run a command.
+    static func tmuxLiteral(_ s: String) -> String { s.replacingOccurrences(of: "#", with: "##") }
+
+    /// The Codex finder stats every rollout file, so it's run every half minute rather than on
+    /// every poll; a pane that has no match yet asks for it sooner (`lastCodex` bridges the gap).
+    @ObservationIgnored private var codexFinderDue = Date.distantPast
+    @ObservationIgnored private var codexUnmatched = false
 
     /// Runs on the work machine, reading "<pane> <pane pid> <folder>" lines and printing
-    /// "@@CODEX <pane> <session id> <rollout path>" for each pane it can place.
+    /// "<mark>CODEX <pane> <session id> <rollout path>" for each pane it can place.
     static let codexFinderScript = #"""
 import json, os, glob, re, subprocess, sys, time
 
+mark = sys.argv[1] if len(sys.argv) > 1 else "@@"
 panes, seen_panes = [], set()
 for line in sys.stdin.read().splitlines():
     f = line.split(" ", 2)
@@ -474,11 +496,14 @@ for pane, pid, path in panes:
         if best_score is None or score < best_score: best, best_score = f, score
     if best:
         taken.add(best)
-        print("@@CODEX %s %s %s" % (pane, meta[best][1], best + goal_of(best)))
+        print("%sCODEX %s %s %s" % (mark, pane, meta[best][1], best + goal_of(best)))
 """#
 
     func refresh() async {
-        let result = await remote.run(Self.pollScript)
+        let mark = "@@" + String(UUID().uuidString.prefix(8)).lowercased()
+        let runFinder = codexUnmatched || Date() >= codexFinderDue
+        if runFinder { codexFinderDue = Date().addingTimeInterval(30) }
+        let result = await remote.run(Self.pollScript(mark: mark, codexFinder: runFinder))
         guard result.ok else {
             if connected { connected = false }
             let error = Self.describe(result)
@@ -496,7 +521,7 @@ for pane, pid, path in panes:
         // Splitting the output and reading every Claude screen is the costly part, and it's pure,
         // so it runs off the main thread; only the comparing and publishing happens here.
         let stdout = result.stdout
-        let parsed = await Task.detached(priority: .userInitiated) { TmuxModel.parse(stdout) }.value
+        let parsed = await Task.detached(priority: .userInitiated) { TmuxModel.parse(stdout, mark: mark) }.value
         Perf.timed("TmuxModel.apply") { apply(parsed) }
     }
 
@@ -564,14 +589,15 @@ for pane, pid, path in panes:
         var question: String?
     }
 
-    nonisolated static func parse(_ output: String) -> PollParse {
+    nonisolated static func parse(_ output: String, mark: String) -> PollParse {
         var out = PollParse()
         var currentCapture: String?
         var updatedByPane: [String: Double] = [:]
+        let codexMark = mark + "CODEX ", sessionMark = mark + "SES ", captureMark = mark + "CAP "
         for line in output.split(separator: "\n", omittingEmptySubsequences: false).map(String.init) {
-            if line.hasPrefix("@@CODEX ") {
-                let f = line.dropFirst(8).split(separator: " ", maxSplits: 2).map(String.init)
-                if f.count == 3 {
+            if line.hasPrefix(codexMark) {
+                let f = line.dropFirst(codexMark.count).split(separator: " ", maxSplits: 2).map(String.init)
+                if f.count == 3, isPaneID(f[0]), isSessionID(f[1]) {
                     let tab = f[2].split(separator: "\t", maxSplits: 1).map(String.init)
                     out.codexByPane[f[0]] = CodexSessionInfo(sessionID: f[1], path: tab[0],
                                                             title: tab.count > 1 ? tab[1] : nil)
@@ -579,12 +605,13 @@ for pane, pid, path in panes:
                 currentCapture = nil
                 continue
             }
-            if line.hasPrefix("@@SES ") {
-                guard let obj = try? JSONSerialization.jsonObject(with: Data(line.dropFirst(6).utf8)) as? [String: Any],
-                      let sid = obj["sessionId"] as? String,
+            if line.hasPrefix(sessionMark) {
+                guard let obj = try? JSONSerialization.jsonObject(with: Data(line.dropFirst(sessionMark.count).utf8)) as? [String: Any],
+                      let sid = obj["sessionId"] as? String, isSessionID(sid),
                       let tmuxTarget = obj["tmux"] as? String,
                       let pct = tmuxTarget.lastIndex(of: "%") else { continue }
                 let paneID = String(tmuxTarget[pct...])
+                guard isPaneID(paneID) else { continue }
                 let updated = obj["updatedAt"] as? Double ?? 0
                 if let existing = updatedByPane[paneID], existing > updated { continue }
                 updatedByPane[paneID] = updated
@@ -595,13 +622,17 @@ for pane, pid, path in panes:
                 currentCapture = nil
                 continue
             }
-            if line.hasPrefix("@@CAP ") {
-                currentCapture = String(line.dropFirst(6))
+            if line.hasPrefix(captureMark) {
+                currentCapture = String(line.dropFirst(captureMark.count))
                 out.captures[currentCapture!] = []
             } else if let id = currentCapture {
                 out.captures[id, default: []].append(line)
-            } else if line.contains(":::") {
-                out.rows.append(line.components(separatedBy: ":::"))
+            } else if line.contains(sep) {
+                // A window name or folder containing ":::" shifts the fields, so a row is only
+                // trusted when it splits into exactly the fields asked for and its ids look
+                // like ids — anything else is dropped rather than guessed at.
+                let f = line.components(separatedBy: sep)
+                if f.count == pollFields.count, isWindowID(f[1]), isPaneID(f[8]) { out.rows.append(f) }
             }
         }
         for (pane, raw) in out.captures {
@@ -633,7 +664,8 @@ for pane, pid, path in panes:
         var windowOrder: [String: [String]] = [:]          // session -> window ids
         var panesByWindow: [String: [TmuxWindow]] = [:]    // "session|@w" -> pane items
         var viewActive: [String: String] = [:]             // view session -> active window id
-        for f in rows where f.count >= 12 {
+        var codexWithoutInfo = false
+        for f in rows {
             let session = f[0]
             if session.hasPrefix(viewSessionPrefix) {
                 if f[6] == "1" { viewActive[session] = f[1] }
@@ -669,6 +701,7 @@ for pane, pid, path in panes:
             } else if isShell {
                 lastCodex[paneID] = nil
             }
+            if codexInfo == nil && command.contains("codex") { codexWithoutInfo = true }
             let state: WindowState
             if isClaude {
                 state = Self.claudeState(screen.tail, info: claudeInfo)
@@ -691,7 +724,8 @@ for pane, pid, path in panes:
             if panesByWindow[key] == nil { windowOrder[session, default: []].append(key) }
             panesByWindow[key, default: []].append(pane)
         }
-        let activePane = Set(rows.filter { $0.count >= 12 && $0[10] == "1" }.map { $0[8] })
+        codexUnmatched = codexWithoutInfo
+        let activePane = Set(rows.filter { $0[10] == "1" }.map { $0[8] })
 
         var bySession: [String: [TmuxWindow]] = [:]
         for session in order {
@@ -986,11 +1020,11 @@ for pane, pid, path in panes:
 
     /// Reads the AI-generated title of each conversation, refreshing every minute.
     func fetchMissingTitles(_ ids: [String]) {
-        let due = ids.filter { Date().timeIntervalSince(titleFetched[$0] ?? .distantPast) > 60 }
+        let due = ids.filter { Self.isSessionID($0) && Date().timeIntervalSince(titleFetched[$0] ?? .distantPast) > 60 }
         guard !due.isEmpty else { return }
         for id in due { titleFetched[id] = Date() }
         let script = due.map { id in
-            "f=$(ls ~/.claude/projects/*/\(id).jsonl 2>/dev/null | head -1); [ -n \"$f\" ] && printf '%s\\t' \(id) && { grep -a '\"type\":\"custom-title\"' \"$f\" | tail -1; grep -a '\"type\":\"ai-title\"' \"$f\" | tail -1; } | head -1"
+            "f=$(ls ~/.claude/projects/*/\(sq(id)).jsonl 2>/dev/null | head -1); [ -n \"$f\" ] && printf '%s\\t' \(sq(id)) && { grep -a '\"type\":\"custom-title\"' \"$f\" | tail -1; grep -a '\"type\":\"ai-title\"' \"$f\" | tail -1; } | head -1"
         }.joined(separator: "; ")
         Task {
             let result = await remote.run(script)
@@ -1400,7 +1434,7 @@ for pane, pid, path in panes:
         let result = await remote.run("python3 -", input: script)
         for line in result.stdout.split(separator: "\n") {
             guard let obj = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any],
-                  let id = obj["id"] as? String, let tmuxTarget = obj["tmux"] as? String,
+                  let id = obj["id"] as? String, Self.isSessionID(id), let tmuxTarget = obj["tmux"] as? String,
                   let colon = tmuxTarget.firstIndex(of: ":"),
                   !candidates.contains(where: { $0.claudeSessionID == id }) else { continue }
             let session = String(tmuxTarget[..<colon])
@@ -1430,7 +1464,8 @@ for pane, pid, path in panes:
         var script = ""
         var seen: [String] = []
         for w in windows {
-            let s = sq(w.session), dir = sq(w.path)
+            // `-c` expands tmux formats, so a `#` in the folder name must be doubled.
+            let s = sq(w.session), dir = sq(Self.tmuxLiteral(w.path))
             if !seen.contains(w.session) {
                 seen.append(w.session)
                 script += """
@@ -1441,9 +1476,11 @@ for pane, pid, path in panes:
             } else {
                 script += "id=$(tmux new-window -d -P -F '#{window_id}' -t \(sq(w.session + ":")) -c \(dir))\n"
             }
-            if let cid = w.claudeSessionID {
+            // The id is typed into a shell, so only something shaped like a session id goes in;
+            // anything else leaves a plain shell in the folder.
+            if let cid = w.claudeSessionID, Self.isSessionID(cid) {
                 script += "tmux send-keys -t \"$id\" \(sq("claude --resume " + cid)) Enter\n"
-            } else if let cid = w.codexSessionID {
+            } else if let cid = w.codexSessionID, Self.isSessionID(cid) {
                 // Codex resumes by session id too; without it you'd get a blank session in the
                 // right folder and lose the conversation.
                 script += "tmux send-keys -t \"$id\" \(sq("codex resume " + cid)) Enter\n"

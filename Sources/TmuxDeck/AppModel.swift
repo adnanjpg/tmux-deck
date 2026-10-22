@@ -42,7 +42,7 @@ final class AppModel: ObservableObject {
 
     func addServer(_ host: String) {
         let host = host.trimmingCharacters(in: .whitespaces)
-        guard !host.isEmpty else { return }
+        guard Remote.isSafeHost(host) else { return }
         if !servers.contains(where: { $0.host == host }) {
             attach(host)
             servers.last?.start()
@@ -291,7 +291,7 @@ final class PortForwarder: ObservableObject {
                        "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3",
                        "-o", "ControlMaster=no", "-o", "ControlPath=none"]
             + activeRules.flatMap { ["-L", "\($0.local):\($0.host):\($0.remote)"] }
-            + [host]
+            + ["--", host]
         let err = Pipe()
         p.standardError = err
         p.standardOutput = FileHandle.nullDevice
@@ -405,7 +405,7 @@ final class PortForwarder: ObservableObject {
         if host == Remote.localHost || host.isEmpty { return [] }
         let p = Process()
         p.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
-        p.arguments = ["-G", host]
+        p.arguments = ["-G", "--", host]
         let out = Pipe()
         p.standardOutput = out
         p.standardError = FileHandle.nullDevice

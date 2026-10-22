@@ -43,7 +43,20 @@ One command every 2 seconds per server, combining several things so it's a singl
 1. clean up stale `deck-*` view sessions (above),
 2. `tmux list-panes -a -F '<fields>'` — one line per pane, `:::`-separated,
 3. every live `~/.claude/sessions/*.json`,
-4. `capture-pane` for each pane that has a Claude session (colour off; the switcher is separate).
+4. `capture-pane` for each pane that has a Claude session (colour off; the switcher is separate),
+5. every half minute, or sooner while a Codex pane has no match, the Codex rollout finder
+   (it stats every rollout file, so it doesn't run on every poll).
+
+The output is parsed defensively, because part of it is whatever is on a Claude screen:
+
+- The record and capture markers carry a **nonce chosen per poll** (`@@<nonce>SES`,
+  `@@<nonce>CAP`, `@@<nonce>CODEX`), so a line printed inside a pane can't pass itself off as a
+  session record or open a capture block of its own.
+- A pane row is only accepted when it splits into **exactly** the fields asked for and its window
+  and pane ids look like ids (`@7`, `%12`). A window name or folder containing `:::` shifts the
+  fields; that row is dropped rather than guessed at (`TmuxModel.parse`).
+- Session ids are checked for shape (`isSessionID`) before they go anywhere near a shell, and
+  every interpolated value is `sq()`-quoted regardless.
 
 Fields collected per pane: session name, window id/index/name, `pane_current_command`,
 `window_panes`, `window_active`, `pane_current_path`, `pane_id`, `pane_index`, `pane_active`,

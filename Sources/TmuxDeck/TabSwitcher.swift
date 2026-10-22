@@ -150,7 +150,8 @@ final class TabSwitcherController: ObservableObject {
                 if pending <= 0 { loadingThumbnails = false }
                 continue
             }
-            let panes = items.compactMap(\.paneID)
+            // Pane ids were checked for shape when polled; they're quoted here all the same.
+            let panes = items.compactMap(\.paneID).filter(TmuxModel.isPaneID).map(sq)
             let script = "for p in \(panes.joined(separator: " ")); do printf '@@P %s\\n' \"$p\"; "
                 + "tmux capture-pane -e -p -t \"$p\" 2>/dev/null; done"
             let task = Task { [weak self] in

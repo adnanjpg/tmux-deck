@@ -138,6 +138,8 @@ struct ChatView: View {
             }
         }
         .background(theme.bg)
+        // Links in a transcript are whatever the model or a tool wrote; only web links open.
+        .environment(\.openURL, OpenURLAction { url in SafeLinks.allows(url) ? .systemAction : .handled })
         .onReceive(NotificationCenter.default.publisher(for: .findInChat)) { _ in
             withAnimation(.snappy) { store.searching = true }
             // A beat, so the field exists before the focus lands on it.

@@ -110,6 +110,8 @@ Read these before touching the related area — each one cost real debugging tim
   for anything the user just did. → [docs/tmux.md](docs/tmux.md)
 - **SSH to the work machine drops constantly.** Anything that must not half-finish has to survive a
   dead connection. → [docs/tmux.md](docs/tmux.md)
+- **tmux expands formats in `new-window -c`** (and `#(…)` runs a command), so a folder name goes
+  through `TmuxModel.tmuxLiteral` (`#` → `##`) first.
 
 ## Testing
 
